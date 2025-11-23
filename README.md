@@ -3,6 +3,8 @@
 
 <img width="256" height="auto" alt="mediapipe-edge-ai" src="https://github.com/user-attachments/assets/c558391d-4885-4546-a15d-d76f2b07379d" />
 
+<br/><br/><br/>
+
 ## First Questions First: Why?
 Running an edge LLM on the user's machine without the need for cloud's great for many reasons, least of which is no API cost.
 |  | ☁️ Cloud/Traditional LLM ☁️ | ⚡️ Edge LLM ⚡️ | &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Winner&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; |
@@ -21,9 +23,22 @@ Running an edge LLM on the user's machine without the need for cloud's great for
 
 These cover nearly all of **what creators & consumers want** in  AI while simply being the **de facto moral choice** whether it comes to monopolies, economy, privacy, environment, or creative expression.
 
+<br/><br/><br/>
+
 ## How to Run the Demo:
-1. `npm install`
-2. `npm run build`
-3. Load the extension as a temporary one from `about:debugging#/runtime/this-firefox` for Firefox and `chrome://extensions` for Chrome (make sure to turn on `Developer Mode` in the top right)
-4. Click on the extension's icon in order to open a chat window where you can type into the top text field and then press the "Get Response" button to get the LLM's generated response
+1. Install a WebGPU compatible browser and enable WebGPU in settings
+2. Place a MediaPipe compatible model file in [`resorces/models`](https://github.com/RandomGamingDev/local-on-device-llm-browser-extension-example/tree/main/resources/models) with pre-converted models like Google's Gemma & Microsoft's Phi being perfect places to start [(you can convert basically whichever industry LLMs you want as long as they're not too large)](https://ai.google.dev/edge/mediapipe/solutions/genai/llm_inference#:~:text=N%2FA-,Models,run%20inferences%20completely%20on%2Ddevice.). For this demo, I used [gemma3-1b-it-int8-web.task](https://huggingface.co/litert-community/Gemma3-1B-IT/blob/main/gemma3-1b-it-int8-web.task) since it runs on even toasters, but it's a pretty bad model tbh so I'd recommend choosing something like [Gemma 3N E2B](https://huggingface.co/google/gemma-3n-E2B-it-litert-lm/blob/main/gemma-3n-E2B-it-int4-Web.litertlm) which is also multi-modal!
+3. `npm install`
+4. `npm run build`
+5. Load the extension as a temporary one from `about:debugging#/runtime/this-firefox` for Firefox and `chrome://extensions` for Chrome (make sure to turn on `Developer Mode` in the top right)
+6. Click on the extension's icon in order to open a chat window where you can type into the top text field and then press the "Get Response" button to get the LLM's generated response
 <img width="681" height="641" alt="image" src="https://github.com/user-attachments/assets/0a4266b7-e052-41de-a0f7-a857734ba7e6" />
+
+<br/><br/><br/>
+
+## Basic Explanation:
+[Google's MediaPipe tutorial](https://ai.google.dev/edge/mediapipe/solutions/genai/llm_inference/web_js) is a great place to start with getting an understanding of how MediaPipe works. <br/>
+The components are commented for your use with the general structure being:
+1. The extension's popup serving as a frontend.
+2. An offscreen page to load the LLM so that it can be shared between multiple contexts and doesn't have to be reloaded every time the page is open.
+3. A backend service acting as a proxy between the popup and offscreen page as required and connected to both via ports.
