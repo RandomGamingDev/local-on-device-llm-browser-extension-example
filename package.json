@@ -3,8 +3,9 @@
   "version": "1.0.0",
   "description": "Run Mediapipe LLMs locally in browser",
   "scripts": {
-    "build": "webpack --mode production",
-    "dev": "webpack --mode development --watch"
+    "copy-models": "node scripts/copy-models.js",
+    "build": "webpack --mode production && npm run copy-models",
+    "dev": "webpack --mode development --watch && npm run copy-models"
   },
   "dependencies": {
     "@mediapipe/tasks-genai": "^0.10.15"

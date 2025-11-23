@@ -21,8 +21,6 @@ module.exports = {
         { from: 'src/popup.html', to: 'src/popup.html' },
         { from: 'src/offscreen.html', to: 'src/offscreen.html' },
 
-        { from: 'resources', to: 'resources' },
-
         {
           from: 'node_modules/@mediapipe/tasks-genai/wasm',
           to: 'wasm',
@@ -40,7 +38,14 @@ module.exports = {
     }
   },
   performance: {
-    maxAssetSize: 100000000,
-    maxEntrypointSize: 100000000,
+    maxAssetSize: 10737418240,
+    maxEntrypointSize: 10737418240,
+    // Don't calculate file hashes for large assets
+    hints: false
+  },
+  // Don't include large files in stats/cache
+  stats: {
+    assets: true,
+    assetsSpace: 100,
   }
 };
