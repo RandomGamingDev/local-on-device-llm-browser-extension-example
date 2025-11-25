@@ -3,6 +3,7 @@ const OFFSCREEN_PATH = "src/offscreen.html";
 
 let offscreen_port = null;
 let promised_offscreen_document = null; 
+let offscreenReady = false;
 
 // Manifest V3 (which is anti-ad bs btw) likes disabling stuff so this is for reenabling if disabled
 // Generate offscreen only if no prior created version is still active, and ensure persistent port connection
@@ -47,9 +48,20 @@ async function createOffscreen() {
   offscreen_port.onDisconnect.addListener(() => offscreen_port = null);
   
   console.log("MediaPipe Local Server: New Offscreen Document created and connected.");
+  offscreenReady = true;
 
   return offscreen_port;
 }
+
+createOffscreen();
+
+RUNTIME.onMessage.addListener(
+  (message, sender, sendResponse) => {
+    if (message === 'is_ready') {
+      sendResponse(offscreenReady);
+    }
+  }
+);
 
 
 RUNTIME.onConnect.addListener(async (popup_port) => {
