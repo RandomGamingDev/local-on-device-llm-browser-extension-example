@@ -2,7 +2,7 @@ import { FilesetResolver, LlmInference } from '@mediapipe/tasks-genai';
 
 const RUNTIME = typeof browser !== "undefined" ? browser.runtime : chrome.runtime;
 
-const MODEL_FILENAME = RUNTIME.getURL("resources/models/gemma3-1b-it-int4.task"); 
+const MODEL_FILENAME = RUNTIME.getURL("resources/models/gemma3-1b-it-int4-web.task"); 
 //const MODEL_FILENAME = RUNTIME.getURL("resources/models/gemma-3n-E2B-it-int4-Web.litertlm"); 
 
 const GEN_AI_FILESET = await FilesetResolver.forGenAiTasks(
