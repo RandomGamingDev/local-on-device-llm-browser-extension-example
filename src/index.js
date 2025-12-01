@@ -36,12 +36,17 @@ function connect() {
   });
 }
 
-RUNTIME.sendMessage('is_ready', (isReady) => {
-  if (isReady) {
-    connect();
-  } else {
-    // Handle the case where the background script is not ready
-    submit.disabled = true;
-    submit.value = "Background not ready";
-  }
-});
+// Set initial state to disabled and begin polling for readiness.
+submit.disabled = true;
+submit.value = "Initializing...";
+
+const readyInterval = setInterval(() => {
+  RUNTIME.sendMessage('is_ready', (isReady) => {
+    if (isReady) {
+      clearInterval(readyInterval);
+      submit.disabled = false;
+      submit.value = "Get response";
+      connect();
+    }
+  });
+}, 1000); // Poll every second.

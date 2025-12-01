@@ -43,6 +43,17 @@ async function createOffscreen() {
   // Then clear the lock when ready
   promised_offscreen_document = null;
 
+  // Wait for the offscreen document to signal it's ready
+  await new Promise((resolve) => {
+    const listener = (message, sender) => {
+      if (message.type === 'offscreen_ready' && sender.url.endsWith(OFFSCREEN_PATH)) {
+        RUNTIME.onMessage.removeListener(listener);
+        resolve();
+      }
+    };
+    RUNTIME.onMessage.addListener(listener);
+  });
+
   // (Re)create the persistent port connection.
   offscreen_port = RUNTIME.connect({ name: "offscreen-worker-port" });
   offscreen_port.onDisconnect.addListener(() => offscreen_port = null);
