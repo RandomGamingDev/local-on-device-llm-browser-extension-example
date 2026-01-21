@@ -2,7 +2,6 @@
   "manifest_version": 3,
   "name": "Local, On Device LLM Browser Extension Example",
   "version": "1.0.0",
-
   "description": "An example with boilerplate for how to get LLMs in browser extensions (without the cloud) via Google's MediaPipe!",
   "icons": {
     "16": "resources/icons/icon-16.png",
@@ -12,7 +11,7 @@
   },
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'",
-    "workers": "script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'; worker-src 'self'" 
+    "workers": "script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'; worker-src 'self'"
   },
   "permissions": [
     "storage",
@@ -26,20 +25,33 @@
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["src/main.js"]
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "src/main.js"
+      ]
     }
   ],
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
   "web_accessible_resources": [
     {
-      "resources": ["resources/*", "wasm/*"],
-      "matches": ["<all_urls>"]
+      "resources": [
+        "resources/*",
+        "wasm/*"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ],
   "browser_specific_settings": {
     "gecko": {
-        "id": "{26c4cb31-78d0-45d6-875a-3c7969f891d9}",
-        "strict_min_version": "91.0"
+      "id": "{26c4cb31-78d0-45d6-875a-3c7969f891d9}",
+      "strict_min_version": "91.0"
     }
   }
 }

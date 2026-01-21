@@ -20,9 +20,8 @@ const input = document.getElementById('input');
 const output = document.getElementById('output');
 const submit = document.getElementById('submit');
 
-// Normally, we'd want a worker with "module" type, but MediaPipe web APIs do
-// not yet support this.
-const worker = new Worker("/src/background.js");
+// Connect to the background service worker
+const port = chrome.runtime.connect({ name: 'popup' });
 
 /**
  * Display newly generated partial results to the output text box.
@@ -42,7 +41,7 @@ function displayPartialResults(partialResults, complete) {
 /**
  * Main function to run LLM Inference given a model.
  */
-async function runDemo(modelStream) {
+async function runDemo() {
   submit.disabled = true;
   // Send query to worker thread when submit is clicked.
   submit.onclick = () => {
@@ -53,7 +52,8 @@ async function runDemo(modelStream) {
     const query = '<start_of_turn>user\n'
       + input.value
       + '<end_of_turn>\n<start_of_turn>model\n';
-    worker.postMessage({
+
+    port.postMessage({
       type: "query",
       payload: { query },
     });
@@ -62,53 +62,59 @@ async function runDemo(modelStream) {
 
   // Send cancel signal to worker thread when cancel is clicked.
   cancel.onclick = () => {
-    worker.postMessage({
+    port.postMessage({
       type: "cancel",
     });
   };
 
-  submit.value = 'Loading the model...'
-
+  submit.value = 'Caching model...';
   try {
-    // Send an init signal (with LLM model Stream) to worker thread, and wait.
-    await new Promise((resolve, reject) => {
-      worker.onmessage = (event) => {
-        const { type, payload } = event.data;
-        if (type === "init" && typeof payload === "object"
-          && payload.isSuccess) {
-          resolve("MediaPipe initialized");
-        }
-      };
-      worker.postMessage({
-        type: "init",
-        payload: {
-          modelStream,
-          wasmUrl: chrome.runtime.getURL("wasm")
-        },
-      }, [modelStream]);
-    });
-  } catch (error) {
-    console.error("Error initializing MediaPipe:", error);
+    const root = await navigator.storage.getDirectory();
+    const fileHandle = await root.getFileHandle("model.bin", { create: true });
+    const writable = await fileHandle.createWritable();
+    await writable.write(modelSelector.files[0]);
+    await writable.close();
+  } catch (e) {
+    console.error("Error writing to OPFS:", e);
+    submit.value = 'Error caching model';
     return;
   }
 
-  // Receive any results from the worker thread, and pipe them to our display.
-  worker.onmessage = (event) => {
-    const { type, payload } = event.data;
-    if (type === "result") {
-      displayPartialResults(payload.partialResults, payload.complete);
+  submit.value = 'Loading the model...'
+
+  // Send an init signal (with LLM model filename) to worker thread via SW
+  port.postMessage({
+    type: "init",
+    payload: {
+      modelName: "model.bin",
+    },
+  });
+
+  // Wait for init confirmation
+  const initListener = (msg) => {
+    const { type, payload } = msg;
+    if (type === "init" && payload && payload.isSuccess) {
+      submit.disabled = false;
+      submit.value = 'Get Response';
+      port.onMessage.removeListener(initListener);
     }
   };
-  submit.disabled = false;
-  submit.value = 'Get Response';
+  port.onMessage.addListener(initListener);
 }
+
+// Receive any results from the worker thread, and pipe them to our display.
+port.onMessage.addListener((msg) => {
+  const { type, payload } = msg;
+  if (type === "result") {
+    displayPartialResults(payload.partialResults, payload.complete);
+  }
+});
 
 // When the user chooses a model from their local hard drive, load it and start
 // the demo.
 modelSelector.onchange = async () => {
   if (modelSelector.files && modelSelector.files.length > 0) {
-    const reader = await modelSelector.files[0].stream();
-    runDemo(reader);
+    runDemo();
   }
 };
 
