@@ -7,7 +7,7 @@ const port = chrome.runtime.connect({ name: 'offscreen' });
 // Relay messages from Service Worker to Web Worker
 port.onMessage.addListener(async (msg) => {
   if (msg.type === 'init') {
-    // Inject local WASM URL here since Worker can't access chrome.runtime
+    // Inject local WASM URL
     msg.payload.wasmUrl = chrome.runtime.getURL("wasm");
 
     try {
@@ -15,26 +15,39 @@ port.onMessage.addListener(async (msg) => {
       let fileHandle;
 
       try {
-        // Try to get existing model
         fileHandle = await root.getFileHandle(msg.payload.modelName);
+        const checkFile = await fileHandle.getFile();
+        if (checkFile.size === 0) {
+          console.warn("Existing model file is empty. Re-downloading.");
+          throw new Error("File empty");
+        }
+        console.log("Found existing model in OPFS. Size:", checkFile.size);
+
       } catch (e) {
-        // If not found, download from resources
-        console.log("Model not found in OPFS, fetching from resources...");
-        const response = await fetch(chrome.runtime.getURL('resources/models/gemma3-1b-it-int4-web.task'));
+        console.log("Model not found/empty in OPFS, fetching from resources...");
+        const response = await fetch(chrome.runtime.getURL(`resources/models/${msg.payload.modelName}`));
         const blob = await response.blob();
+
+        if (blob.size === 0) {
+          throw new Error("Fetched blob is empty!");
+        }
 
         fileHandle = await root.getFileHandle(msg.payload.modelName, { create: true });
         const writable = await fileHandle.createWritable();
         await writable.write(blob);
         await writable.close();
-        console.log("Model cached to OPFS.");
+        console.log("Model cached to OPFS. Size:", blob.size);
       }
 
       const file = await fileHandle.getFile();
+      if (file.size === 0) {
+        throw new Error("File size is 0 after write!");
+      }
+
       const modelStream = file.stream();
       msg.payload.modelStream = modelStream;
 
-      // Forward to worker with transferables
+      // Forward to worker
       worker.postMessage(msg, [modelStream]);
     } catch (e) {
       console.error("Offscreen: Error loading model", e);

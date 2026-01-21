@@ -12,7 +12,6 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
-console.log("FLAG1");
 
 // const modelSelector = document.getElementById('model-select');
 const cancel = document.getElementById('cancel');
@@ -74,7 +73,9 @@ async function runDemo() {
   port.postMessage({
     type: "init",
     payload: {
-      modelName: "model.bin",
+      //modelName: "gemma3-1b-it-int4-web.task"
+      //modelName: "gemma3-4b-it-int4-web.task"
+      //modelName: "gemma-3n-E2B-it-int4-Web.litertlm"
     },
   });
 
@@ -102,59 +103,3 @@ port.onMessage.addListener((msg) => {
 // the demo.
 // Automatically start loading the model
 runDemo();
-
-
-/*
-// HTML Elements
-const input = document.getElementById('input');
-const output = document.getElementById('output');
-const submit = document.getElementById('submit');
-
-// Create a listener to the background so it doesn't have to be reloaded everything and everything's abstracted
-const RUNTIME = typeof browser !== 'undefined' ? browser.runtime : chrome.runtime;
-
-function connect() {
-  const port = RUNTIME.connect({ name: "mediapipe-llm" });
-  port.onMessage.addListener((msg) => {
-    // Stream in the partial results
-    output.textContent += msg.partialResult;
-    // Allow for another prompt to be entered if response is done
-    if (msg.complete) {
-      submit.disabled = false;
-      submit.value = "Get response";
-    }
-  });
-
-  // Send a request to the background worker server so that it can relay the input and response to and from the offscreen page
-  submit.onclick = () => {
-    // Stop another prompt being entered if response is being generated
-    output.textContent = "";
-    submit.disabled = true;
-    submit.value = "Generating response...";
-
-    // Request from the local server (specifically background proxy which will request from offscreen page) LLM's inference
-    port.postMessage({ input: input.value });
-  };
-
-  port.onDisconnect.addListener(() => {
-    console.log("Disconnected from MediaPipe Local Server");
-    submit.disabled = true;
-    submit.value = "Disconnected";
-  });
-}
-
-// Set initial state to disabled and begin polling for readiness.
-submit.disabled = true;
-submit.value = "Initializing...";
-
-const readyInterval = setInterval(() => {
-  RUNTIME.sendMessage('is_ready', (isReady) => {
-    if (isReady) {
-      clearInterval(readyInterval);
-      submit.disabled = false;
-      submit.value = "Get response";
-      connect();
-    }
-  });
-}, 1000); // Poll every second.
-*/
