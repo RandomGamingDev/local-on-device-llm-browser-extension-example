@@ -3,7 +3,6 @@ const input = document.getElementById('input');
 const output = document.getElementById('output');
 const submit = document.getElementById('submit');
 const modelSelector = document.getElementById('model-select');
-const status = document.getElementById('status'); // Ensure status element exists if used
 
 // Connect to Background
 const port = chrome.runtime.connect({ name: 'popup' });
@@ -25,32 +24,45 @@ port.onMessage.addListener((msg) => {
   }
 });
 
-// User selects model file
+// Default model name to load
+const DEFAULT_MODEL_NAME = "gemma-3n-E2B-it-int4-Web.litertlm";
+
+function startAutoLoad() {
+  output.textContent = `[System] Auto-initializing with ${DEFAULT_MODEL_NAME}...\n(Checking OPFS cache...)\n`;
+  submit.value = "Auto-loading...";
+
+  // Send init immediately. 
+  // Offscreen will check OPFS. If missing, it will stream-fetch safely.
+  port.postMessage({
+    type: "init",
+    payload: {
+      modelName: DEFAULT_MODEL_NAME,
+    },
+  });
+}
+
+// Manual option for user to select their own model
 modelSelector.onchange = async () => {
   if (modelSelector.files && modelSelector.files.length > 0) {
     submit.value = "Caching to OPFS...";
     submit.disabled = true;
 
     const file = modelSelector.files[0];
-    output.textContent = `[System] Caching ${file.name} to OPFS...\nThis allows multiple components to access it.\n`;
+    output.textContent = `[System] Caching ${file.name} to OPFS...\n`;
 
     try {
-      // Write to OPFS from Popup
       const root = await navigator.storage.getDirectory();
       const fileHandle = await root.getFileHandle(file.name, { create: true });
       const writable = await fileHandle.createWritable();
       await writable.write(file);
       await writable.close();
 
-      output.textContent += `[System] Cache complete. Initializing Worker...\n`;
+      output.textContent += `[System] Cache complete. Initializing...\n`;
 
-      // Now tell the background/offscreen to load this filename
-      // The Offscreen doc will open it from OPFS and stream it to the worker.
       port.postMessage({
         type: "init",
         payload: {
           modelName: file.name,
-          // No stream passed here, Offscreen will create it.
         },
       });
 
@@ -62,7 +74,7 @@ modelSelector.onchange = async () => {
   }
 };
 
-// Handle Submit
+// Handle submission
 submit.onclick = () => {
   output.textContent = "";
   submit.disabled = true;
@@ -74,6 +86,5 @@ submit.onclick = () => {
   });
 };
 
-// Initial State
-submit.disabled = true;
-submit.value = "Select Model First";
+// Start Auto-Load on popup open
+startAutoLoad();

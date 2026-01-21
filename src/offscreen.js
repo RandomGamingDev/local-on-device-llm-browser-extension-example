@@ -26,17 +26,14 @@ port.onMessage.addListener(async (msg) => {
       } catch (e) {
         console.log("Model not found/empty in OPFS, fetching from resources...");
         const response = await fetch(chrome.runtime.getURL(`resources/models/${msg.payload.modelName}`));
-        const blob = await response.blob();
-
-        if (blob.size === 0) {
-          throw new Error("Fetched blob is empty!");
-        }
+        if (!response.body) throw new Error("Fetch response body is null");
 
         fileHandle = await root.getFileHandle(msg.payload.modelName, { create: true });
         const writable = await fileHandle.createWritable();
-        await writable.write(blob);
-        await writable.close();
-        console.log("Model cached to OPFS. Size:", blob.size);
+
+        await response.body.pipeTo(writable);
+
+        console.log("Model stream-cached to OPFS.");
       }
 
       const file = await fileHandle.getFile();
@@ -47,13 +44,11 @@ port.onMessage.addListener(async (msg) => {
       const modelStream = file.stream();
       msg.payload.modelStream = modelStream;
 
-      // Forward to worker
       worker.postMessage(msg, [modelStream]);
     } catch (e) {
       console.error("Offscreen: Error loading model", e);
     }
   } else {
-    // Forward other messages (query, cancel, etc.)
     worker.postMessage(msg);
   }
 });
@@ -63,7 +58,7 @@ worker.onmessage = (event) => {
   port.postMessage(event.data);
 };
 
-// Keep alive
+// Keep alive heartbeat (Manifest V3 T-T)
 setInterval(() => {
   if (port) port.postMessage({ type: 'ping' });
 }, 20000);
