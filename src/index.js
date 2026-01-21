@@ -1,105 +1,79 @@
-/* Copyright 2026 The MediaPipe Authors.
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-     http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
-// const modelSelector = document.getElementById('model-select');
-const cancel = document.getElementById('cancel');
 const input = document.getElementById('input');
 const output = document.getElementById('output');
 const submit = document.getElementById('submit');
+const modelSelector = document.getElementById('model-select');
+const status = document.getElementById('status'); // Ensure status element exists if used
 
-// Connect to the background service worker
+// Connect to Background
 const port = chrome.runtime.connect({ name: 'popup' });
 
-/**
- * Display newly generated partial results to the output text box.
- */
-function displayPartialResults(partialResults, complete) {
-  output.textContent += partialResults;
-
-  if (complete) {
-    if (!output.textContent) {
-      output.textContent = 'Result is empty';
-    }
-    submit.disabled = false;
-    cancel.disabled = true;
-  }
-}
-
-/**
- * Main function to run LLM Inference given a model.
- */
-async function runDemo() {
-  submit.disabled = true;
-  // Send query to worker thread when submit is clicked.
-  submit.onclick = () => {
-    output.textContent = '';
-    submit.disabled = true;
-    // Gemma 3 models require a simple template for best results. See
-    // https://ai.google.dev/gemma/docs/core/prompt-structure.
-    const query = '<start_of_turn>user\n'
-      + input.value
-      + '<end_of_turn>\n<start_of_turn>model\n';
-
-    port.postMessage({
-      type: "query",
-      payload: { query },
-    });
-    cancel.disabled = false;
-  };
-
-  // Send cancel signal to worker thread when cancel is clicked.
-  cancel.onclick = () => {
-    port.postMessage({
-      type: "cancel",
-    });
-  };
-
-  submit.value = 'Loading the model...'
-
-  // Send an init signal to worker thread via SW
-  // The offscreen worker will handle fetching/caching if needed.
-  port.postMessage({
-    type: "init",
-    payload: {
-      //modelName: "gemma3-1b-it-int4-web.task"
-      //modelName: "gemma3-4b-it-int4-web.task"
-      //modelName: "gemma-3n-E2B-it-int4-Web.litertlm"
-    },
-  });
-
-  // Wait for init confirmation
-  const initListener = (msg) => {
-    const { type, payload } = msg;
-    if (type === "init" && payload && payload.isSuccess) {
-      submit.disabled = false;
-      submit.value = 'Get Response';
-      port.onMessage.removeListener(initListener);
-    }
-  };
-  port.onMessage.addListener(initListener);
-}
-
-// Receive any results from the worker thread, and pipe them to our display.
+// Listen for updates
 port.onMessage.addListener((msg) => {
-  const { type, payload } = msg;
-  if (type === "result") {
-    displayPartialResults(payload.partialResults, payload.complete);
+  if (msg.type === 'init') {
+    if (msg.payload.isSuccess) {
+      submit.disabled = false;
+      submit.value = "Get Response";
+      output.textContent += "\n[System] Model Loaded Successfully.\n";
+    }
+  } else if (msg.type === "result") {
+    output.textContent += msg.payload.partialResults;
+    if (msg.payload.complete) {
+      submit.disabled = false;
+      submit.value = "Get Response";
+    }
   }
 });
 
-// When the user chooses a model from their local hard drive, load it and start
-// the demo.
-// Automatically start loading the model
-runDemo();
+// User selects model file
+modelSelector.onchange = async () => {
+  if (modelSelector.files && modelSelector.files.length > 0) {
+    submit.value = "Caching to OPFS...";
+    submit.disabled = true;
+
+    const file = modelSelector.files[0];
+    output.textContent = `[System] Caching ${file.name} to OPFS...\nThis allows multiple components to access it.\n`;
+
+    try {
+      // Write to OPFS from Popup
+      const root = await navigator.storage.getDirectory();
+      const fileHandle = await root.getFileHandle(file.name, { create: true });
+      const writable = await fileHandle.createWritable();
+      await writable.write(file);
+      await writable.close();
+
+      output.textContent += `[System] Cache complete. Initializing Worker...\n`;
+
+      // Now tell the background/offscreen to load this filename
+      // The Offscreen doc will open it from OPFS and stream it to the worker.
+      port.postMessage({
+        type: "init",
+        payload: {
+          modelName: file.name,
+          // No stream passed here, Offscreen will create it.
+        },
+      });
+
+    } catch (e) {
+      output.textContent += `[Error] Failed to save to OPFS: ${e.message}\n`;
+      console.error(e);
+      submit.value = "Error";
+    }
+  }
+};
+
+// Handle Submit
+submit.onclick = () => {
+  output.textContent = "";
+  submit.disabled = true;
+  submit.value = "Generating...";
+
+  port.postMessage({
+    type: "query",
+    payload: { query: input.value }
+  });
+};
+
+// Initial State
+submit.disabled = true;
+submit.value = "Select Model First";
