@@ -10,10 +10,26 @@ port.onMessage.addListener(async (msg) => {
     // Inject local WASM URL here since Worker can't access chrome.runtime
     msg.payload.wasmUrl = chrome.runtime.getURL("wasm");
 
-    // Read model from OPFS
     try {
       const root = await navigator.storage.getDirectory();
-      const fileHandle = await root.getFileHandle(msg.payload.modelName);
+      let fileHandle;
+
+      try {
+        // Try to get existing model
+        fileHandle = await root.getFileHandle(msg.payload.modelName);
+      } catch (e) {
+        // If not found, download from resources
+        console.log("Model not found in OPFS, fetching from resources...");
+        const response = await fetch(chrome.runtime.getURL('resources/models/gemma3-1b-it-int4-web.task'));
+        const blob = await response.blob();
+
+        fileHandle = await root.getFileHandle(msg.payload.modelName, { create: true });
+        const writable = await fileHandle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        console.log("Model cached to OPFS.");
+      }
+
       const file = await fileHandle.getFile();
       const modelStream = file.stream();
       msg.payload.modelStream = modelStream;
@@ -21,7 +37,7 @@ port.onMessage.addListener(async (msg) => {
       // Forward to worker with transferables
       worker.postMessage(msg, [modelStream]);
     } catch (e) {
-      console.error("Offscreen: Error reading model from OPFS", e);
+      console.error("Offscreen: Error loading model", e);
     }
   } else {
     // Forward other messages (query, cancel, etc.)

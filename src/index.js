@@ -14,7 +14,7 @@ limitations under the License.
 */
 console.log("FLAG1");
 
-const modelSelector = document.getElementById('model-select');
+// const modelSelector = document.getElementById('model-select');
 const cancel = document.getElementById('cancel');
 const input = document.getElementById('input');
 const output = document.getElementById('output');
@@ -67,22 +67,10 @@ async function runDemo() {
     });
   };
 
-  submit.value = 'Caching model...';
-  try {
-    const root = await navigator.storage.getDirectory();
-    const fileHandle = await root.getFileHandle("model.bin", { create: true });
-    const writable = await fileHandle.createWritable();
-    await writable.write(modelSelector.files[0]);
-    await writable.close();
-  } catch (e) {
-    console.error("Error writing to OPFS:", e);
-    submit.value = 'Error caching model';
-    return;
-  }
-
   submit.value = 'Loading the model...'
 
-  // Send an init signal (with LLM model filename) to worker thread via SW
+  // Send an init signal to worker thread via SW
+  // The offscreen worker will handle fetching/caching if needed.
   port.postMessage({
     type: "init",
     payload: {
@@ -112,11 +100,8 @@ port.onMessage.addListener((msg) => {
 
 // When the user chooses a model from their local hard drive, load it and start
 // the demo.
-modelSelector.onchange = async () => {
-  if (modelSelector.files && modelSelector.files.length > 0) {
-    runDemo();
-  }
-};
+// Automatically start loading the model
+runDemo();
 
 
 /*
