@@ -5,8 +5,7 @@ module.exports = {
   entry: {
     index: path.resolve(__dirname, 'src/index.js'),
     background: path.resolve(__dirname, 'src/background.js'),
-    main: path.resolve(__dirname, 'src/main.js'),
-    offscreen: path.resolve(__dirname, 'src/offscreen.js')
+    main: path.resolve(__dirname, 'src/main.js')
   },
   output: {
     filename: 'src/[name].js',

@@ -30,13 +30,9 @@
       "js": ["src/main.js"]
     }
   ],
-  "background": {
-    "service_worker": "src/background.js",
-    "scripts": ["src/background.js"]
-  },
   "web_accessible_resources": [
     {
-      "resources": ["resources/*", "wasm/*", "src/offscreen.html"],
+      "resources": ["resources/*", "wasm/*"],
       "matches": ["<all_urls>"]
     }
   ],
