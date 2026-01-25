@@ -26,6 +26,7 @@ port.onMessage.addListener((msg) => {
 
 // Default model name to load
 const DEFAULT_MODEL_NAME = "gemma-3n-E2B-it-int4-Web.litertlm";
+//const DEFAULT_MODEL_NAME = "gemma3-1b-it-int4-web.task";
 
 function startAutoLoad() {
   output.textContent = `[System] Auto-initializing with ${DEFAULT_MODEL_NAME}...\n(Checking OPFS cache...)\n`;
