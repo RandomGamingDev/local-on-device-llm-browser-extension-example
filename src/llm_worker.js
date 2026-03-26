@@ -57,7 +57,8 @@ self.onmessage = async (event) => {
               '\n' + payload.query + '<end_of_turn>\n<start_of_turn>model\n'
             ], returnPartialResults);
           } else {
-            await llmInference.generateResponse(payload.query, returnPartialResults);
+            const formattedQuery = `<start_of_turn>user\n${payload.query}<end_of_turn>\n<start_of_turn>model\n`;
+            await llmInference.generateResponse(formattedQuery, returnPartialResults);
           }
         } catch (e) {
           console.error("Worker: Error generating response", e);

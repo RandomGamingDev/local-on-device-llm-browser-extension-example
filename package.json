@@ -8,7 +8,10 @@
     "dev": "webpack --mode development --watch && npm run copy-models"
   },
   "dependencies": {
-    "@mediapipe/tasks-genai": "^0.10.15"
+    "@mediapipe/tasks-genai": "^0.10.15",
+    "katex": "^0.16.43",
+    "marked": "^17.0.5",
+    "marked-katex-extension": "^5.1.7"
   },
   "devDependencies": {
     "copy-webpack-plugin": "^11.0.0",
