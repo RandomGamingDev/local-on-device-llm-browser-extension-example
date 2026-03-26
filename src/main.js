@@ -4,6 +4,76 @@ let isModelReady = false;
 let currentResSpan = null;
 let currentImageDataUrl = null;
 
+let cachedContextUrl = null;
+let cachedContextData = null;
+
+// Extract context from current Boilerexams question page
+async function getQuestionContext() {
+  const currentUrl = window.location.href;
+  if (currentUrl === cachedContextUrl) return cachedContextData;
+
+  const match = window.location.pathname.match(/\/([a-f0-9\-]{36})$/i);
+  if (!match) return null;
+  const questionId = match[1];
+
+  try {
+    const res = await fetch(`https://api.boilerexams.com/questions/${questionId}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    cachedContextUrl = currentUrl;
+    cachedContextData = data;
+    return data;
+  } catch (e) {
+    console.error("Failed to fetch context", e);
+    return null;
+  }
+}
+
+function formatContextString(qData) {
+  if (!qData || !qData.data) return "";
+  let text = "Question Context:\n";
+  if (qData.data.body) {
+    text += qData.data.body + "\n";
+  }
+
+  if (qData.type === "MULTIPLE_CHOICE" && qData.data.answerChoices) {
+    text += "\nChoices:\n";
+    const choices = [...qData.data.answerChoices].sort((a, b) => a.index - b.index);
+    choices.forEach((choice, i) => {
+      text += `${String.fromCharCode(65 + i)}: ${choice.body}\n`;
+    });
+  }
+  return text;
+}
+
+async function extractFirstImage(qData) {
+  if (!qData) return null;
+  
+  const resources = [...(qData.resources || [])];
+  if (qData.type === "MULTIPLE_CHOICE" && qData.data && qData.data.answerChoices) {
+    qData.data.answerChoices.forEach(c => {
+      if (c.resources) resources.push(...c.resources);
+    });
+  }
+
+  const imageRes = resources.find(r => r.type === "IMAGE");
+  if (imageRes && imageRes.data && imageRes.data.url) {
+    try {
+      const imgResp = await fetch(imageRes.data.url);
+      const blob = await imgResp.blob();
+      return await new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result);
+        reader.readAsDataURL(blob);
+      });
+    } catch (e) {
+      console.error("Failed to load question image", e);
+      return null;
+    }
+  }
+  return null;
+}
+
 function setupPort() {
   if (contentPort) return;
   contentPort = chrome.runtime.connect({ name: 'content' });
@@ -39,12 +109,29 @@ function initModel(modelName) {
   });
 }
 
-function queryModel(text) {
+async function queryModel(text) {
   if (!isModelReady) {
     addMessage("System: Please load a model first.");
     return;
   }
-  const payload = { query: text };
+  
+  const contextData = await getQuestionContext();
+  let finalQuery = text;
+  
+  if (contextData) {
+    const contextString = formatContextString(contextData);
+    finalQuery = `Context from current page:\n${contextString}\n\nUser Question:\n${text}`;
+    
+    // Automatically attach image if user didn't manually upload one
+    if (!currentImageDataUrl) {
+      const autoImageUrl = await extractFirstImage(contextData);
+      if (autoImageUrl) {
+        currentImageDataUrl = autoImageUrl;
+      }
+    }
+  }
+
+  const payload = { query: finalQuery };
   
   if (currentImageDataUrl) {
     payload.image = currentImageDataUrl;
