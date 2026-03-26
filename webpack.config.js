@@ -3,7 +3,6 @@ const CopyPlugin = require('copy-webpack-plugin');
 
 module.exports = {
   entry: {
-    index: path.resolve(__dirname, 'src/index.js'),
     background: path.resolve(__dirname, 'src/background.js'),
     llm_worker: path.resolve(__dirname, 'src/llm_worker.js'),
     offscreen: path.resolve(__dirname, 'src/offscreen.js'),
@@ -19,7 +18,6 @@ module.exports = {
     new CopyPlugin({
       patterns: [
         { from: 'manifest.json', to: 'manifest.json' },
-        { from: 'src/popup.html', to: 'src/popup.html' },
         { from: 'src/offscreen.html', to: 'src/offscreen.html' },
 
         {

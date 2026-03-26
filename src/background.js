@@ -1,6 +1,6 @@
 const OFFSCREEN_PATH = 'src/offscreen.html';
 let offscreenPort = null;
-let popupPort = null;
+let contentPort = null;
 
 async function setupOffscreen() {
   const existingContexts = await chrome.runtime.getContexts({
@@ -25,8 +25,8 @@ chrome.runtime.onConnect.addListener((port) => {
       console.log('SW: Connected to Offscreen');
 
       offscreenPort.onMessage.addListener((msg) => {
-        if (popupPort)
-          popupPort.postMessage(msg);
+        if (contentPort)
+          contentPort.postMessage(msg);
       });
 
       offscreenPort.onDisconnect.addListener(() => {
@@ -35,22 +35,22 @@ chrome.runtime.onConnect.addListener((port) => {
         setupOffscreen();
       });
       break;
-    case "popup":
-      popupPort = port;
-      console.log('SW: Connected to Popup');
+    case "content":
+      contentPort = port;
+      console.log('SW: Connected to Content Script');
 
       setupOffscreen();
 
-      popupPort.onMessage.addListener((msg) => {
+      contentPort.onMessage.addListener((msg) => {
         if (offscreenPort)
           offscreenPort.postMessage(msg);
         else
           console.warn("SW: Offscreen port not ready, dropping message", msg);
       });
 
-      popupPort.onDisconnect.addListener(() => {
-        popupPort = null;
-        console.log('SW: Popup disconnected');
+      contentPort.onDisconnect.addListener(() => {
+        contentPort = null;
+        console.log('SW: Content Script disconnected');
       });
       break;
   }

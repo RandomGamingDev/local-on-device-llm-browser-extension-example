@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Local, On Device LLM Browser Extension Example",
+  "name": "Boiler Tai",
   "version": "1.0.0",
-  "description": "An example with boilerplate for how to get LLMs in browser extensions (without the cloud) via Google's MediaPipe!",
+  "description": "A completely local AI TA tutor!",
   "icons": {
     "16": "resources/icons/icon-16.png",
     "48": "resources/icons/icon-48.png",
@@ -20,9 +20,6 @@
   "host_permissions": [
     "<all_urls>"
   ],
-  "action": {
-    "default_popup": "src/popup.html"
-  },
   "content_scripts": [
     {
       "matches": [
