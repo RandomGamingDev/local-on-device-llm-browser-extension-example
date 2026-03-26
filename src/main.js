@@ -2,6 +2,7 @@
 let contentPort = null;
 let isModelReady = false;
 let currentResSpan = null;
+let currentImageDataUrl = null;
 
 function setupPort() {
   if (contentPort) return;
@@ -43,9 +44,22 @@ function queryModel(text) {
     addMessage("System: Please load a model first.");
     return;
   }
+  const payload = { query: text };
+  
+  if (currentImageDataUrl) {
+    payload.image = currentImageDataUrl;
+    currentImageDataUrl = null;
+    
+    // reset preview UI
+    const preview = document.getElementById('boiler-tai-image-preview');
+    if (preview) preview.style.display = 'none';
+    const fileInput = document.getElementById('boiler-tai-image-input');
+    if (fileInput) fileInput.value = '';
+  }
+
   contentPort.postMessage({
     type: 'query',
-    payload: { query: text }
+    payload
   });
 }
 
@@ -214,8 +228,50 @@ function injectUI() {
   inputArea.style.padding = '12px';
   inputArea.style.borderTop = '1px solid #eee';
   inputArea.style.display = 'flex';
+  inputArea.style.flexDirection = 'column';
   inputArea.style.gap = '8px';
   inputArea.style.background = '#fafafa';
+
+  const previewImg = document.createElement('img');
+  previewImg.id = 'boiler-tai-image-preview';
+  previewImg.style.display = 'none';
+  previewImg.style.maxWidth = '100px';
+  previewImg.style.maxHeight = '100px';
+  previewImg.style.borderRadius = '8px';
+  previewImg.style.objectFit = 'cover';
+
+  const rowDiv = document.createElement('div');
+  rowDiv.style.display = 'flex';
+  rowDiv.style.gap = '8px';
+  rowDiv.style.alignItems = 'center';
+
+  const fileInput = document.createElement('input');
+  fileInput.type = 'file';
+  fileInput.id = 'boiler-tai-image-input';
+  fileInput.accept = 'image/*';
+  fileInput.style.display = 'none';
+  fileInput.onchange = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        currentImageDataUrl = ev.target.result;
+        previewImg.src = currentImageDataUrl;
+        previewImg.style.display = 'block';
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const uploadBtn = document.createElement('button');
+  uploadBtn.innerText = '📷';
+  uploadBtn.title = 'Upload Image';
+  uploadBtn.style.padding = '8px';
+  uploadBtn.style.background = 'none';
+  uploadBtn.style.border = 'none';
+  uploadBtn.style.fontSize = '18px';
+  uploadBtn.style.cursor = 'pointer';
+  uploadBtn.onclick = () => fileInput.click();
 
   const textInput = document.createElement('input');
   textInput.type = 'text';
@@ -236,8 +292,13 @@ function injectUI() {
   sendBtn.style.cursor = 'pointer';
   sendBtn.style.fontWeight = 'bold';
 
-  inputArea.appendChild(textInput);
-  inputArea.appendChild(sendBtn);
+  rowDiv.appendChild(uploadBtn);
+  rowDiv.appendChild(textInput);
+  rowDiv.appendChild(sendBtn);
+
+  inputArea.appendChild(previewImg);
+  inputArea.appendChild(rowDiv);
+  inputArea.appendChild(fileInput);
 
   chatWindow.appendChild(header);
   chatWindow.appendChild(controlsDiv);

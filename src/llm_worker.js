@@ -1,36 +1,36 @@
 import { FilesetResolver, LlmInference } from '@mediapipe/tasks-genai';
 
+// Polyfill DOM references that MediaPipe might check during image validation
+if (typeof HTMLImageElement === 'undefined') self.HTMLImageElement = class {};
+if (typeof HTMLVideoElement === 'undefined') self.HTMLVideoElement = class {};
+if (typeof HTMLCanvasElement === 'undefined') self.HTMLCanvasElement = class {};
+
 function returnPartialResults(partialResults, complete) {
   self.postMessage({ type: "result", payload: { partialResults, complete } });
 }
 
 let llmInference = null;
-async function initialize(modelStream, wasmUrl) {
+async function initialize(modelStream, wasmUrl, modelName) {
   const genaiFileset = await FilesetResolver.forGenAiTasks(wasmUrl);
+  
+  const isMultimodal = modelName && (modelName.toLowerCase().includes('3n') || modelName.toLowerCase().includes('e2b'));
+  
+  const options = {
+    baseOptions: { modelAssetBuffer: modelStream },
+  };
+  
+  if (isMultimodal) {
+    options.maxNumImages = 1;
+  }
 
-  llmInference = await LlmInference.createFromOptions(genaiFileset, {
-    baseOptions: { modelAssetBuffer: modelStream },  // Use modelAssetPath
-    // instead for URLs.
-    // maxTokens: 512,  // The maximum number of tokens (input tokens + output
-    //                  // tokens) the model handles.
-    // randomSeed: 1,   // The random seed used during text generation.
-    // topK: 1,  // The number of tokens the model considers at each step of
-    //           // generation. Limits predictions to the top k most-probable
-    //           // tokens. Setting randomSeed is required for this to make
-    //           // effects.
-    // temperature:
-    //     1.0,  // The amount of randomness introduced during generation.
-    //           // Setting randomSeed is required for this to make effects.
-    // For multimodal (Gemma 3n) options and more documentation, see
-    // https://ai.google.dev/edge/mediapipe/solutions/genai/llm_inference/web_js
-  });
+  llmInference = await LlmInference.createFromOptions(genaiFileset, options);
 }
 
 self.onmessage = async (event) => {
   const { type, payload } = event.data;
 
   if (type === "init") {
-    await initialize(payload.modelStream.getReader(), payload.wasmUrl);
+    await initialize(payload.modelStream.getReader(), payload.wasmUrl, payload.modelName);
     self.postMessage({
       type: "init",
       payload: {
@@ -46,7 +46,23 @@ self.onmessage = async (event) => {
         llmInference.cancelProcessing();
         break;
       case "query":
-        llmInference.generateResponse(payload.query, returnPartialResults);
+        try {
+          if (payload.image) {
+            const resp = await fetch(payload.image);
+            const blob = await resp.blob();
+            const imageBitmap = await createImageBitmap(blob);
+            await llmInference.generateResponse([
+              '<start_of_turn>user\n',
+              { imageSource: imageBitmap },
+              '\n' + payload.query + '<end_of_turn>\n<start_of_turn>model\n'
+            ], returnPartialResults);
+          } else {
+            await llmInference.generateResponse(payload.query, returnPartialResults);
+          }
+        } catch (e) {
+          console.error("Worker: Error generating response", e);
+          self.postMessage({ type: "error", payload: { message: e.message || e.toString() } });
+        }
         break;
     }
 };
