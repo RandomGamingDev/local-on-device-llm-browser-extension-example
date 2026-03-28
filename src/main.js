@@ -488,7 +488,43 @@ function injectUI() {
   header.style.userSelect = 'none';
   header.style.boxSizing = 'border-box';
   header.style.borderRadius = '12px 12px 0 0';
-  header.innerText = 'Boiler Tai Chat';
+  header.style.display = 'flex';
+  header.style.alignItems = 'center';
+  header.style.justifyContent = 'space-between';
+  header.style.gap = '4px';
+
+  const titleSpan = document.createElement('span');
+  titleSpan.innerText = 'Boiler Tai';
+  titleSpan.style.fontWeight = 'bold';
+  titleSpan.style.fontSize = '16px';
+
+  const tabRow = document.createElement('div');
+  tabRow.style.display = 'flex';
+  tabRow.style.gap = '4px';
+
+  const chatTab = document.createElement('button');
+  chatTab.innerText = '💬 Chat';
+  const padTab = document.createElement('button');
+  padTab.innerText = '✏️ Pad';
+
+  const tabStyle = (btn, active) => {
+    btn.style.padding = '4px 10px';
+    btn.style.border = 'none';
+    btn.style.borderRadius = '8px';
+    btn.style.cursor = 'pointer';
+    btn.style.fontWeight = '600';
+    btn.style.fontSize = '12px';
+    btn.style.transition = 'background 0.2s';
+    btn.style.background = active ? '#ceb888' : 'rgba(255,255,255,0.15)';
+    btn.style.color = active ? '#000' : '#ceb888';
+  };
+  tabStyle(chatTab, true);
+  tabStyle(padTab, false);
+  tabRow.appendChild(chatTab);
+  tabRow.appendChild(padTab);
+
+  header.appendChild(titleSpan);
+  header.appendChild(tabRow);
 
   // Drag logic
   let isDragging = false;
@@ -652,243 +688,306 @@ function injectUI() {
   inputArea.appendChild(rowDiv);
   inputArea.appendChild(fileInput);
 
-  // Tabs
-  const tabsDiv = document.createElement('div');
-  tabsDiv.style.display = 'flex';
-  tabsDiv.style.background = '#eee';
-  tabsDiv.style.borderBottom = '1px solid #ccc';
-  tabsDiv.style.boxSizing = 'border-box';
+  // --- Chat content wrapper ---
+  const chatContent = document.createElement('div');
+  chatContent.style.display = 'flex';
+  chatContent.style.flexDirection = 'column';
+  chatContent.style.flex = '1';
+  chatContent.style.overflow = 'hidden';
+  chatContent.appendChild(msgList);
+  chatContent.appendChild(inputArea);
 
-  const chatTabBtn = document.createElement('button');
-  chatTabBtn.innerText = '💬 Chat';
-  chatTabBtn.style.flex = '1';
-  chatTabBtn.style.padding = '8px';
-  chatTabBtn.style.border = 'none';
-  chatTabBtn.style.background = '#fff';
-  chatTabBtn.style.cursor = 'pointer';
-  chatTabBtn.style.fontWeight = 'bold';
+  // --- Scratchpad content ---
+  const scratchpadContent = document.createElement('div');
+  scratchpadContent.style.display = 'none';
+  scratchpadContent.style.flexDirection = 'column';
+  scratchpadContent.style.flex = '1';
+  scratchpadContent.style.overflow = 'hidden';
+  scratchpadContent.style.boxSizing = 'border-box';
 
-  const scratchTabBtn = document.createElement('button');
-  scratchTabBtn.innerText = '📝 Scratchpad';
-  scratchTabBtn.style.flex = '1';
-  scratchTabBtn.style.padding = '8px';
-  scratchTabBtn.style.border = 'none';
-  scratchTabBtn.style.background = '#eee';
-  scratchTabBtn.style.cursor = 'pointer';
+  // Scratchpad toolbar
+  const spToolbar = document.createElement('div');
+  spToolbar.style.display = 'flex';
+  spToolbar.style.gap = '6px';
+  spToolbar.style.padding = '8px 10px';
+  spToolbar.style.borderBottom = '1px solid #eee';
+  spToolbar.style.alignItems = 'center';
+  spToolbar.style.background = '#f9f9f9';
+  spToolbar.style.boxSizing = 'border-box';
+  spToolbar.style.flexWrap = 'wrap';
 
-  tabsDiv.appendChild(chatTabBtn);
-  tabsDiv.appendChild(scratchTabBtn);
+  const modeTypeBtn = document.createElement('button');
+  modeTypeBtn.innerText = '⌨️ Type';
+  const modeDrawBtn = document.createElement('button');
+  modeDrawBtn.innerText = '🖊️ Draw';
 
-  // Chat container wrapper
-  const chatInputContainer = document.createElement('div');
-  chatInputContainer.style.display = 'flex';
-  chatInputContainer.style.flexDirection = 'column';
-  chatInputContainer.style.flexGrow = '1';
-  chatInputContainer.style.overflow = 'hidden';
-  chatInputContainer.appendChild(controlsDiv);
-  chatInputContainer.appendChild(msgList);
-  chatInputContainer.appendChild(inputArea);
+  const spBtnStyle = (btn, active) => {
+    Object.assign(btn.style, {
+      padding: '4px 10px', border: '1px solid #ccc', borderRadius: '6px',
+      cursor: 'pointer', fontWeight: '600', fontSize: '12px',
+      background: active ? '#000' : '#fff', color: active ? '#ceb888' : '#333'
+    });
+  };
+  spBtnStyle(modeTypeBtn, true);
+  spBtnStyle(modeDrawBtn, false);
 
-  // Scratchpad container
-  const scratchpadContainer = document.createElement('div');
-  scratchpadContainer.style.display = 'none';
-  scratchpadContainer.style.flexDirection = 'column';
-  scratchpadContainer.style.flexGrow = '1';
-  scratchpadContainer.style.overflow = 'hidden';
-  scratchpadContainer.style.background = '#fafafa';
-  scratchpadContainer.style.padding = '10px';
-  scratchpadContainer.style.boxSizing = 'border-box';
-  scratchpadContainer.style.gap = '10px';
+  // Draw sub-tools (hidden in type mode)
+  const drawTools = document.createElement('div');
+  drawTools.style.display = 'none';
+  drawTools.style.gap = '6px';
+  drawTools.style.alignItems = 'center';
 
-  const toolDiv = document.createElement('div');
-  toolDiv.style.display = 'flex';
-  toolDiv.style.gap = '5px';
-  
-  const penBtn = document.createElement('button');
-  penBtn.innerText = '✏️ Pen';
-  const eraseBtn = document.createElement('button');
-  eraseBtn.innerText = '🧽 Erase';
+  const colorPicker = document.createElement('input');
+  colorPicker.type = 'color';
+  colorPicker.value = '#000000';
+  colorPicker.title = 'Pen Color';
+  colorPicker.style.width = '28px';
+  colorPicker.style.height = '28px';
+  colorPicker.style.border = 'none';
+  colorPicker.style.cursor = 'pointer';
+  colorPicker.style.padding = '0';
+
+  const eraserBtn = document.createElement('button');
+  eraserBtn.innerText = '🧹';
+  eraserBtn.title = 'Eraser';
+  eraserBtn.style.padding = '4px 8px';
+  eraserBtn.style.border = '1px solid #ccc';
+  eraserBtn.style.borderRadius = '6px';
+  eraserBtn.style.cursor = 'pointer';
+  eraserBtn.style.fontSize = '14px';
+
   const clearBtn = document.createElement('button');
   clearBtn.innerText = '🗑️ Clear';
-  
-  [penBtn, eraseBtn, clearBtn].forEach(b => {
-    b.style.padding = '4px 8px';
-    b.style.cursor = 'pointer';
-    b.style.border = '1px solid #ccc';
-    b.style.borderRadius = '4px';
-    b.style.background = '#fff';
-    toolDiv.appendChild(b);
-  });
-  penBtn.style.background = '#e0e0e0';
+  clearBtn.style.padding = '4px 8px';
+  clearBtn.style.border = '1px solid #ccc';
+  clearBtn.style.borderRadius = '6px';
+  clearBtn.style.cursor = 'pointer';
+  clearBtn.style.fontSize = '12px';
 
+  drawTools.appendChild(colorPicker);
+  drawTools.appendChild(eraserBtn);
+  drawTools.appendChild(clearBtn);
+
+  spToolbar.appendChild(modeTypeBtn);
+  spToolbar.appendChild(modeDrawBtn);
+  spToolbar.appendChild(drawTools);
+
+  // Type mode area
+  const typeArea = document.createElement('textarea');
+  typeArea.placeholder = 'Write your work here (equations, steps, notes)...';
+  typeArea.style.flex = '1';
+  typeArea.style.padding = '12px';
+  typeArea.style.border = 'none';
+  typeArea.style.outline = 'none';
+  typeArea.style.resize = 'none';
+  typeArea.style.fontFamily = 'monospace, sans-serif';
+  typeArea.style.fontSize = '14px';
+  typeArea.style.background = '#fffef5';
+  typeArea.style.color = '#000';
+  typeArea.style.boxSizing = 'border-box';
+  typeArea.style.lineHeight = '1.6';
+
+  // Draw mode area
   const canvasWrapper = document.createElement('div');
-  canvasWrapper.style.flexGrow = '1';
-  canvasWrapper.style.border = '1px solid #ccc';
-  canvasWrapper.style.borderRadius = '8px';
+  canvasWrapper.style.flex = '1';
+  canvasWrapper.style.display = 'none';
+  canvasWrapper.style.overflow = 'hidden';
   canvasWrapper.style.background = '#fff';
   canvasWrapper.style.position = 'relative';
-  canvasWrapper.style.overflow = 'hidden';
 
   const canvas = document.createElement('canvas');
-  canvas.style.width = '100%';
-  canvas.style.height = '100%';
+  canvas.style.display = 'block';
+  canvas.style.cursor = 'crosshair';
   canvas.style.touchAction = 'none';
   canvasWrapper.appendChild(canvas);
 
-  const scratchText = document.createElement('textarea');
-  scratchText.placeholder = 'Type additional reasoning here...';
-  scratchText.style.width = '100%';
-  scratchText.style.height = '60px';
-  scratchText.style.minHeight = '60px';
-  scratchText.style.resize = 'vertical';
-  scratchText.style.padding = '8px';
-  scratchText.style.boxSizing = 'border-box';
-  scratchText.style.border = '1px solid #ccc';
-  scratchText.style.borderRadius = '8px';
-
-  const gradeBtn = document.createElement('button');
-  gradeBtn.innerText = 'Grade My Work';
-  gradeBtn.style.padding = '10px';
-  gradeBtn.style.background = '#ceb888';
-  gradeBtn.style.color = '#000';
-  gradeBtn.style.fontWeight = 'bold';
-  gradeBtn.style.border = 'none';
-  gradeBtn.style.borderRadius = '8px';
-  gradeBtn.style.cursor = 'pointer';
-
-  scratchpadContainer.appendChild(toolDiv);
-  scratchpadContainer.appendChild(canvasWrapper);
-  scratchpadContainer.appendChild(scratchText);
-  scratchpadContainer.appendChild(gradeBtn);
-
-  chatWindow.appendChild(header);
-  chatWindow.appendChild(tabsDiv);
-  chatWindow.appendChild(chatInputContainer);
-  chatWindow.appendChild(scratchpadContainer);
-
-  document.body.appendChild(chatWindow);
-
-  // Event Listeners
-  chatTabBtn.onclick = () => {
-    chatTabBtn.style.background = '#fff';
-    scratchTabBtn.style.background = '#eee';
-    chatTabBtn.style.fontWeight = 'bold';
-    scratchTabBtn.style.fontWeight = 'normal';
-    chatInputContainer.style.display = 'flex';
-    scratchpadContainer.style.display = 'none';
-  };
-
-  scratchTabBtn.onclick = () => {
-    scratchTabBtn.style.background = '#fff';
-    chatTabBtn.style.background = '#eee';
-    scratchTabBtn.style.fontWeight = 'bold';
-    chatTabBtn.style.fontWeight = 'normal';
-    scratchpadContainer.style.display = 'flex';
-    chatInputContainer.style.display = 'none';
-    resizeCanvas();
-  };
-
-  // Canvas drawing logic
-  let ctx = canvas.getContext('2d');
-  let drawing = false;
-  let currentTool = 'pen';
-
+  // Resize canvas to wrapper when shown
   const resizeCanvas = () => {
-    const tempCanvas = document.createElement('canvas');
-    tempCanvas.width = canvas.width;
-    tempCanvas.height = canvas.height;
-    tempCanvas.getContext('2d').drawImage(canvas, 0, 0);
-    
-    const rect = canvasWrapper.getBoundingClientRect();
-    if (rect.width > 0 && rect.height > 0) {
-      canvas.width = rect.width;
-      canvas.height = rect.height;
-      ctx = canvas.getContext('2d');
-      ctx.fillStyle = '#fff';
-      if (tempCanvas.width === 0 || tempCanvas.height === 0 || tempCanvas.width === 300) {
-          ctx.fillRect(0, 0, canvas.width, canvas.height); 
-      } else {
-          ctx.fillRect(0, 0, canvas.width, canvas.height); 
-          ctx.drawImage(tempCanvas, 0, 0);
-      }
-    }
+    const r = canvasWrapper.getBoundingClientRect();
+    const imgData = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
+    canvas.width = r.width;
+    canvas.height = r.height;
+    canvas.getContext('2d').putImageData(imgData, 0, 0);
   };
-  
-  new ResizeObserver(resizeCanvas).observe(canvasWrapper);
+
+  // Drawing state
+  let drawing = false;
+  let erasing = false;
+  let lastX = 0, lastY = 0;
+
+  eraserBtn.addEventListener('click', () => {
+    erasing = !erasing;
+    eraserBtn.style.background = erasing ? '#000' : '';
+    eraserBtn.style.color = erasing ? '#fff' : '';
+  });
+
+  clearBtn.addEventListener('click', () => {
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  });
 
   const getPos = (e) => {
-    const rect = canvas.getBoundingClientRect();
-    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-    return { x: clientX - rect.left, y: clientY - rect.top };
+    const r = canvas.getBoundingClientRect();
+    if (e.touches) return { x: e.touches[0].clientX - r.left, y: e.touches[0].clientY - r.top };
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
   };
 
   const startDraw = (e) => {
     drawing = true;
     const pos = getPos(e);
-    ctx.beginPath();
-    ctx.moveTo(pos.x, pos.y);
+    lastX = pos.x; lastY = pos.y;
+    e.preventDefault();
   };
 
   const draw = (e) => {
     if (!drawing) return;
-    e.preventDefault();
+    const ctx = canvas.getContext('2d');
     const pos = getPos(e);
-    ctx.lineTo(pos.x, pos.y);
-    ctx.strokeStyle = currentTool === 'erase' ? '#fff' : '#000';
-    ctx.lineWidth = currentTool === 'erase' ? 20 : 2;
+    ctx.lineWidth = erasing ? 20 : 2;
     ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
+    ctx.strokeStyle = erasing ? '#fff' : colorPicker.value;
+    ctx.globalCompositeOperation = erasing ? 'destination-out' : 'source-over';
+    ctx.beginPath();
+    ctx.moveTo(lastX, lastY);
+    ctx.lineTo(pos.x, pos.y);
     ctx.stroke();
+    lastX = pos.x; lastY = pos.y;
+    e.preventDefault();
   };
 
-  const stopDraw = () => {
-    drawing = false;
-    ctx.closePath();
-  };
+  const stopDraw = () => { drawing = false; };
 
   canvas.addEventListener('mousedown', startDraw);
   canvas.addEventListener('mousemove', draw);
   canvas.addEventListener('mouseup', stopDraw);
-  canvas.addEventListener('mouseout', stopDraw);
-  canvas.addEventListener('touchstart', startDraw, {passive: false});
-  canvas.addEventListener('touchmove', draw, {passive: false});
+  canvas.addEventListener('mouseleave', stopDraw);
+  canvas.addEventListener('touchstart', startDraw, { passive: false });
+  canvas.addEventListener('touchmove', draw, { passive: false });
   canvas.addEventListener('touchend', stopDraw);
 
-  penBtn.onclick = () => { currentTool = 'pen'; penBtn.style.background = '#e0e0e0'; eraseBtn.style.background = '#fff'; };
-  eraseBtn.onclick = () => { currentTool = 'erase'; eraseBtn.style.background = '#e0e0e0'; penBtn.style.background = '#fff'; };
-  clearBtn.onclick = () => {
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-  };
+  // Mode switching
+  let spMode = 'type';
+  modeTypeBtn.addEventListener('click', () => {
+    spMode = 'type';
+    typeArea.style.display = 'block';
+    canvasWrapper.style.display = 'none';
+    drawTools.style.display = 'none';
+    spBtnStyle(modeTypeBtn, true);
+    spBtnStyle(modeDrawBtn, false);
+  });
 
-  gradeBtn.onclick = () => {
-    const text = scratchText.value.trim();
-    const blank = document.createElement('canvas');
-    blank.width = canvas.width;
-    blank.height = canvas.height;
-    blank.getContext('2d').fillStyle = '#fff';
-    blank.getContext('2d').fillRect(0, 0, blank.width, blank.height);
-    
-    // Some browsers differ slightly in empty pixel coloring compressions, but this is a rough exact match
-    const isBlank = canvas.toDataURL() === blank.toDataURL();
-    
-    if (isBlank && !text) {
-      alert("Please draw or type your work first!");
+  modeDrawBtn.addEventListener('click', () => {
+    spMode = 'draw';
+    typeArea.style.display = 'none';
+    canvasWrapper.style.display = 'block';
+    drawTools.style.display = 'flex';
+    spBtnStyle(modeDrawBtn, true);
+    spBtnStyle(modeTypeBtn, false);
+    setTimeout(resizeCanvas, 50);
+  });
+
+  // Scratchpad grade area
+  const spBottom = document.createElement('div');
+  spBottom.style.padding = '10px';
+  spBottom.style.borderTop = '1px solid #eee';
+  spBottom.style.background = '#fafafa';
+  spBottom.style.boxSizing = 'border-box';
+  spBottom.style.display = 'flex';
+  spBottom.style.gap = '8px';
+  spBottom.style.alignItems = 'center';
+  spBottom.style.borderRadius = '0 0 12px 12px';
+
+  const gradeHint = document.createElement('span');
+  gradeHint.innerText = 'Send work to AI for grading';
+  gradeHint.style.flex = '1';
+  gradeHint.style.fontSize = '12px';
+  gradeHint.style.color = '#888';
+
+  const gradeBtn = document.createElement('button');
+  gradeBtn.innerText = '📝 Grade';
+  gradeBtn.style.padding = '8px 16px';
+  gradeBtn.style.background = '#ceb888';
+  gradeBtn.style.color = '#000';
+  gradeBtn.style.border = 'none';
+  gradeBtn.style.borderRadius = '10px';
+  gradeBtn.style.cursor = 'pointer';
+  gradeBtn.style.fontWeight = 'bold';
+  gradeBtn.style.fontSize = '13px';
+
+  spBottom.appendChild(gradeHint);
+  spBottom.appendChild(gradeBtn);
+
+  scratchpadContent.appendChild(spToolbar);
+  scratchpadContent.appendChild(typeArea);
+  scratchpadContent.appendChild(canvasWrapper);
+  scratchpadContent.appendChild(spBottom);
+
+  // Grade handler
+  gradeBtn.addEventListener('click', async () => {
+    if (!isModelReady) {
+      addMessage('System: Please load a model first.');
+      // Switch to chat tab to show message
+      chatTab.click();
       return;
     }
 
-    if (!isBlank) {
-      currentImageDataUrl = canvas.toDataURL('image/png');
-    }
-    
-    const gradePrompt = `Please act as a TA and grade my work for the current question.\nMy text reasoning is: ${text || "(None)"}\nMy written work is attached as an image. Provide hints if I am wrong.`;
-    
-    chatTabBtn.click();
-    addMessage("You: [Submitted Scratchpad Work for Grading]");
-    queryModel(gradePrompt);
-  };
+    const contextData = await getQuestionContext();
+    const contextString = contextData ? formatContextString(contextData) : '';
 
+    let gradePrompt = 'Please grade this student\'s work.';
+    if (contextString) {
+      gradePrompt += `\n\nQuestion context:\n${contextString}`;
+    }
+
+    let imageDataUrl = null;
+
+    if (spMode === 'type') {
+      const workText = typeArea.value.trim();
+      if (!workText) { addMessage('System: Scratchpad is empty.'); chatTab.click(); return; }
+      gradePrompt += `\n\nStudent\'s typed work:\n${workText}\n\nProvide: whether it is correct, any key mistakes, and a brief explanation.`;
+    } else {
+      // Check if canvas has any content
+      const ctx = canvas.getContext('2d');
+      const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+      const hasContent = pixels.some(v => v !== 0);
+      if (!hasContent) { addMessage('System: Canvas is blank.'); chatTab.click(); return; }
+      imageDataUrl = canvas.toDataURL('image/png');
+      gradePrompt += '\n\nThe student\'s hand-drawn work is attached as an image. Please evaluate it.\n\nProvide: whether it is correct, any key mistakes, and a brief explanation.';
+    }
+
+    // Send to LLM
+    addMessage('You: [Submitted scratchpad work for grading]');
+    chatTab.click(); // Switch to chat to see response
+
+    // temporarily override image for this query
+    if (imageDataUrl) currentImageDataUrl = imageDataUrl;
+    await queryModel(gradePrompt);
+  });
+
+  // Tab switching logic
+  chatTab.addEventListener('click', () => {
+    chatContent.style.display = 'flex';
+    scratchpadContent.style.display = 'none';
+    tabStyle(chatTab, true);
+    tabStyle(padTab, false);
+  });
+
+  padTab.addEventListener('click', () => {
+    chatContent.style.display = 'none';
+    scratchpadContent.style.display = 'flex';
+    tabStyle(padTab, true);
+    tabStyle(chatTab, false);
+    if (spMode === 'draw') setTimeout(resizeCanvas, 50);
+  });
+
+  // Assemble chatWindow
+  chatWindow.appendChild(header);
+  chatWindow.appendChild(controlsDiv);
+  chatWindow.appendChild(chatContent);
+  chatWindow.appendChild(scratchpadContent);
+  document.body.appendChild(chatWindow);
+
+  // Event Listeners
   toggleBtn.onclick = () => {
     if (chatWindow.style.display === 'none') {
       chatWindow.style.display = 'flex';
