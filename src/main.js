@@ -12,6 +12,38 @@ let currentImageDataUrl = null;
 let cachedContextUrl = null;
 let cachedContextData = null;
 
+// Blind mode: suppress answer choices + choice images from context
+let blindMode = false;
+
+// Personality system
+const PERSONALITY_KEYS = ['default', 'anti-hallucination', 'cs-tutor', 'math-tutor'];
+const PERSONALITY_LABELS = { 'default': 'Default', 'anti-hallucination': 'Anti-Hallucination', 'cs-tutor': 'CS Tutor', 'math-tutor': 'Math Tutor' };
+let activePersonality = 'default';
+const personalityCache = {};
+
+async function loadPersonality(key) {
+  if (personalityCache[key]) return personalityCache[key];
+  try {
+    const url = chrome.runtime.getURL(`personalities/${key}.md`);
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const text = await res.text();
+    personalityCache[key] = text;
+    return text;
+  } catch (e) {
+    console.warn(`[BoilerTai] Could not load personality "${key}":`, e);
+    return '';
+  }
+}
+
+// Load persisted settings
+chrome.storage.local.get(['btBlindMode', 'btPersonality'], (result) => {
+  if (result.btBlindMode !== undefined) blindMode = !!result.btBlindMode;
+  if (result.btPersonality && PERSONALITY_KEYS.includes(result.btPersonality)) {
+    activePersonality = result.btPersonality;
+  }
+});
+
 // Extract context from current Boilerexams question page
 async function getQuestionContext() {
   const currentUrl = window.location.href;
@@ -34,49 +66,122 @@ async function getQuestionContext() {
   }
 }
 
+function stripHtml(html) {
+  if (!html) return '';
+  // Use a temporary DOM element to decode entities and strip tags
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  return tmp.textContent || tmp.innerText || '';
+}
+
 function formatContextString(qData) {
   if (!qData || !qData.data) return "";
   let text = "Question Context:\n";
   if (qData.data.body) {
-    text += qData.data.body + "\n";
+    text += stripHtml(qData.data.body) + "\n";
   }
 
-  if (qData.type === "MULTIPLE_CHOICE" && qData.data.answerChoices) {
+  // In blind mode, omit answer choices so the model cannot anchor on them
+  if (!blindMode && qData.type === "MULTIPLE_CHOICE" && qData.data.answerChoices) {
     text += "\nChoices:\n";
     const choices = [...qData.data.answerChoices].sort((a, b) => a.index - b.index);
     choices.forEach((choice, i) => {
-      text += `${String.fromCharCode(65 + i)}: ${choice.body}\n`;
+      text += `${String.fromCharCode(65 + i)}: ${stripHtml(choice.body)}\n`;
     });
   }
   return text;
 }
 
-async function extractFirstImage(qData) {
-  if (!qData) return null;
-  
-  const resources = [...(qData.resources || [])];
-  if (qData.type === "MULTIPLE_CHOICE" && qData.data && qData.data.answerChoices) {
-    qData.data.answerChoices.forEach(c => {
-      if (c.resources) resources.push(...c.resources);
+const MAX_IMAGES = 5;
+
+async function fetchImageAsDataUrl(url, index) {
+  try {
+    const imgResp = await fetch(url);
+    const blob = await imgResp.blob();
+    return await new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result);
+      reader.readAsDataURL(blob);
     });
+  } catch (e) {
+    console.error(`Failed to load image ${index + 1}`, e);
+    return null;
+  }
+}
+
+async function extractAllImages(qData) {
+  if (!qData) return { questionImages: [], choiceImages: [] };
+
+  // Question body images: first try top-level resources
+  let questionImageUrls = (qData.resources || [])
+    .filter(r => r.type === "IMAGE" && r.data && r.data.url)
+    .map(r => r.data.url)
+    .slice(0, MAX_IMAGES);
+  console.log('[BoilerTai] Top-level resources:', qData.resources?.length ?? 0, '→ IMAGE urls:', questionImageUrls);
+
+  // Fallback 1: scan the body HTML template for inline <img> tags
+  if (questionImageUrls.length === 0 && qData.data && qData.data.body) {
+    const tmp = document.createElement('div');
+    tmp.innerHTML = qData.data.body;
+    const imgTags = Array.from(tmp.querySelectorAll('img'));
+    questionImageUrls = imgTags
+      .map(img => img.getAttribute('src'))
+      .filter(src => src && src.startsWith('http'))
+      .slice(0, MAX_IMAGES);
+    console.log('[BoilerTai] Fallback1 body HTML imgs found:', imgTags.length, '→ valid srcs:', questionImageUrls);
   }
 
-  const imageRes = resources.find(r => r.type === "IMAGE");
-  if (imageRes && imageRes.data && imageRes.data.url) {
-    try {
-      const imgResp = await fetch(imageRes.data.url);
-      const blob = await imgResp.blob();
-      return await new Promise((resolve) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result);
-        reader.readAsDataURL(blob);
-      });
-    } catch (e) {
-      console.error("Failed to load question image", e);
-      return null;
+  // Fallback 2: scan the live rendered DOM
+  if (questionImageUrls.length === 0) {
+    const mainContent = document.querySelector('#main-content') || document.body;
+    const allImgs = Array.from(mainContent.querySelectorAll('img'));
+    console.log('[BoilerTai] Fallback2 DOM scan: #main-content found:', !!document.querySelector('#main-content'), 'total imgs:', allImgs.length, 'srcs:', allImgs.map(i => i.src));
+    const domImgs = allImgs
+      .filter(img => {
+        const src = img.src || '';
+        return src.includes('boilerexams-production.s3') || src.includes('amazonaws.com') || src.includes('boilerexams');
+      })
+      .map(img => img.src)
+      .filter(Boolean)
+      .slice(0, MAX_IMAGES);
+    questionImageUrls = [...new Set(domImgs)]; // deduplicate
+    console.log('[BoilerTai] Fallback2 filtered imgs:', questionImageUrls);
+  }
+
+  // Answer choice images — labeled with their choice letter (skipped in blind mode)
+  const choiceImages = [];
+  if (!blindMode && qData.type === "MULTIPLE_CHOICE" && qData.data && qData.data.answerChoices) {
+    const letters = ['A', 'B', 'C', 'D', 'E', 'F'];
+    for (let i = 0; i < qData.data.answerChoices.length && choiceImages.length < MAX_IMAGES; i++) {
+      const choice = qData.data.answerChoices[i];
+      // Check choice resources
+      const imgRes = (choice.resources || []).filter(r => r.type === "IMAGE" && r.data && r.data.url);
+      for (const r of imgRes) {
+        const dataUrl = await fetchImageAsDataUrl(r.data.url, choiceImages.length);
+        if (dataUrl) choiceImages.push({ dataUrl, label: letters[i] || `Choice ${i+1}` });
+        if (choiceImages.length >= MAX_IMAGES) break;
+      }
+      // Also scan choice HTML body for inline images
+      if (choice.body) {
+        const tmp = document.createElement('div');
+        tmp.innerHTML = choice.body;
+        const imgTags = Array.from(tmp.querySelectorAll('img'));
+        for (const img of imgTags) {
+          const src = img.src || img.getAttribute('src');
+          if (!src) continue;
+          const dataUrl = await fetchImageAsDataUrl(src, choiceImages.length);
+          if (dataUrl) choiceImages.push({ dataUrl, label: letters[i] || `Choice ${i+1}` });
+          if (choiceImages.length >= MAX_IMAGES) break;
+        }
+      }
     }
   }
-  return null;
+
+  const questionImages = (await Promise.all(
+    questionImageUrls.map((url, i) => fetchImageAsDataUrl(url, i))
+  )).filter(Boolean);
+
+  return { questionImages, choiceImages };
 }
 
 function setupPort() {
@@ -122,31 +227,41 @@ async function queryModel(text) {
   
   const contextData = await getQuestionContext();
   let finalQuery = text;
+  let questionImages = [];
+  let choiceImages = [];
   
+  // Load personality system prompt
+  const systemPrompt = await loadPersonality(activePersonality);
+
   if (contextData) {
     const contextString = formatContextString(contextData);
-    finalQuery = `Context from current page:\n${contextString}\n\nUser Question:\n${text}`;
-    
-    // Automatically attach image if user didn't manually upload one
-    if (!currentImageDataUrl) {
-      const autoImageUrl = await extractFirstImage(contextData);
-      if (autoImageUrl) {
-        currentImageDataUrl = autoImageUrl;
-      }
-    }
+    const extracted = await extractAllImages(contextData);
+    questionImages = extracted.questionImages;
+    choiceImages = extracted.choiceImages;
+    const totalImgs = questionImages.length + choiceImages.length;
+    const blindNote = blindMode ? '[BLIND MODE: Answer choices have been hidden from context.]\n\n' : '';
+    const imageNote = totalImgs > 0
+      ? `[Note: ${questionImages.length} question diagram(s) and ${choiceImages.length} answer choice image(s) are attached. If the text context above contains structural information like adjacency lists, edge weights, or equations, PRIORITIZE the text description — it is more reliable than visual inference for dense technical diagrams.]\n\n`
+      : '';
+    finalQuery = `Context from current page:\n${contextString}\n\n${blindNote}${imageNote}User Question:\n${text}`;
   }
 
-  const payload = { query: finalQuery };
-  
+  // Manual upload is prepended to question images
   if (currentImageDataUrl) {
-    payload.image = currentImageDataUrl;
+    questionImages = [currentImageDataUrl, ...questionImages].slice(0, MAX_IMAGES);
     currentImageDataUrl = null;
-    
-    // reset preview UI
     const preview = document.getElementById('boiler-tai-image-preview');
     if (preview) preview.style.display = 'none';
     const fileInput = document.getElementById('boiler-tai-image-input');
     if (fileInput) fileInput.value = '';
+  }
+
+  const payload = { query: finalQuery, systemPrompt };
+  const totalAttached = questionImages.length + choiceImages.length;
+  if (totalAttached > 0) {
+    payload.questionImages = questionImages;
+    payload.choiceImages = choiceImages;
+    addMessage(`System: Attached ${questionImages.length} question image(s) + ${choiceImages.length} answer choice image(s).${blindMode ? ' [Blind mode: choices hidden]' : ''}`);
   }
 
   contentPort.postMessage({
@@ -523,8 +638,63 @@ function injectUI() {
   tabRow.appendChild(chatTab);
   tabRow.appendChild(padTab);
 
+  // Blind mode toggle button
+  const blindBtn = document.createElement('button');
+  const updateBlindBtn = () => {
+    blindBtn.textContent = blindMode ? '🙈' : '👁';
+    blindBtn.title = blindMode ? 'Blind mode ON (click to show answers)' : 'Blind mode OFF (click to hide answers)';
+    blindBtn.style.background = blindMode ? '#ceb888' : 'rgba(255,255,255,0.15)';
+    blindBtn.style.color = blindMode ? '#000' : '#ceb888';
+  };
+  blindBtn.style.padding = '4px 8px';
+  blindBtn.style.border = 'none';
+  blindBtn.style.borderRadius = '8px';
+  blindBtn.style.cursor = 'pointer';
+  blindBtn.style.fontSize = '14px';
+  blindBtn.style.transition = 'background 0.2s';
+  blindBtn.addEventListener('mousedown', e => e.stopPropagation());
+  blindBtn.addEventListener('click', () => {
+    blindMode = !blindMode;
+    chrome.storage.local.set({ btBlindMode: blindMode });
+    updateBlindBtn();
+  });
+  updateBlindBtn();
+
+  // Personality picker
+  const personalitySelect = document.createElement('select');
+  personalitySelect.style.padding = '3px 6px';
+  personalitySelect.style.border = 'none';
+  personalitySelect.style.borderRadius = '8px';
+  personalitySelect.style.cursor = 'pointer';
+  personalitySelect.style.fontSize = '11px';
+  personalitySelect.style.fontWeight = '600';
+  personalitySelect.style.background = 'rgba(255,255,255,0.15)';
+  personalitySelect.style.color = '#ceb888';
+  personalitySelect.style.maxWidth = '110px';
+  personalitySelect.title = 'AI Personality';
+  personalitySelect.addEventListener('mousedown', e => e.stopPropagation());
+  PERSONALITY_KEYS.forEach(key => {
+    const opt = document.createElement('option');
+    opt.value = key;
+    opt.textContent = PERSONALITY_LABELS[key] || key;
+    if (key === activePersonality) opt.selected = true;
+    personalitySelect.appendChild(opt);
+  });
+  personalitySelect.addEventListener('change', () => {
+    activePersonality = personalitySelect.value;
+    chrome.storage.local.set({ btPersonality: activePersonality });
+    // Pre-warm the cache
+    loadPersonality(activePersonality);
+  });
+  // Sync initial value once storage loads
+  chrome.storage.local.get(['btPersonality'], (r) => {
+    if (r.btPersonality) personalitySelect.value = r.btPersonality;
+  });
+
   header.appendChild(titleSpan);
   header.appendChild(tabRow);
+  header.appendChild(blindBtn);
+  header.appendChild(personalitySelect);
 
   // Drag logic
   let isDragging = false;

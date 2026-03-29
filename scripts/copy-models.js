@@ -72,6 +72,16 @@ function splitFile(srcPath, destDir, originalName) {
 const srcDir = path.resolve(__dirname, '../resources');
 const destDir = path.resolve(__dirname, '../dist/resources');
 
+// Copy personalities directory
+const personalitiesSrc = path.resolve(__dirname, '../personalities');
+const personalitiesDest = path.resolve(__dirname, '../dist/personalities');
+
 console.log('Copying and processing model files...');
 copyDirectory(srcDir, destDir);
+
+if (fs.existsSync(personalitiesSrc)) {
+  console.log('Copying personality files...');
+  copyDirectory(personalitiesSrc, personalitiesDest);
+}
+
 console.log('Model processing complete!');
