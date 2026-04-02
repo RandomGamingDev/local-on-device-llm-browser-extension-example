@@ -8,6 +8,8 @@ let contentPort = null;
 let isModelReady = false;
 let currentResSpan = null;
 let currentImageDataUrl = null;
+let isGenerating = false;
+let setGenerating = null; // set by injectUI once the stop button exists
 
 let cachedContextUrl = null;
 let cachedContextData = null;
@@ -15,34 +17,44 @@ let cachedContextData = null;
 // Blind mode: suppress answer choices + choice images from context
 let blindMode = false;
 
-// Personality system
-const PERSONALITY_KEYS = ['default', 'anti-hallucination', 'cs-tutor', 'math-tutor'];
-const PERSONALITY_LABELS = { 'default': 'Default', 'anti-hallucination': 'Anti-Hallucination', 'cs-tutor': 'CS Tutor', 'math-tutor': 'Math Tutor' };
-let activePersonality = 'default';
-const personalityCache = {};
+// Block-based prompt composer (DSPy-style)
+const BLOCK_IDS = [
+  'role-tutor', 'role-explainer',
+  'domain-cs', 'domain-math', 'domain-physics',
+  'technique-anti-hallucination', 'technique-chain-of-thought', 'technique-verify',
+  'constraint-no-spoilers', 'constraint-latex'
+];
+const CATEGORY_LABELS = { role: '🎭 Role', domain: '📚 Domain', technique: '🔬 Technique', constraint: '🔒 Constraint' };
+let blockRegistry = {};        // id -> block object
+let activeComposition = [];    // [{id, indent}] flat ordered list with nesting depth
 
-async function loadPersonality(key) {
-  if (personalityCache[key]) return personalityCache[key];
-  try {
-    const url = chrome.runtime.getURL(`personalities/${key}.md`);
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const text = await res.text();
-    personalityCache[key] = text;
-    return text;
-  } catch (e) {
-    console.warn(`[BoilerTai] Could not load personality "${key}":`, e);
-    return '';
-  }
+async function initBlockRegistry() {
+  const results = await Promise.allSettled(
+    BLOCK_IDS.map(id =>
+      fetch(chrome.runtime.getURL(`personalities/blocks/${id}.json`)).then(r => r.json())
+    )
+  );
+  results.forEach((res, i) => {
+    if (res.status === 'fulfilled') blockRegistry[BLOCK_IDS[i]] = res.value;
+  });
+}
+
+function assemblePrompt(composition) {
+  return composition
+    .map(item => blockRegistry[item.id] && blockRegistry[item.id].content)
+    .filter(Boolean)
+    .join('\n\n');
 }
 
 // Load persisted settings
-chrome.storage.local.get(['btBlindMode', 'btPersonality'], (result) => {
+chrome.storage.local.get(['btBlindMode', 'btComposition'], (result) => {
   if (result.btBlindMode !== undefined) blindMode = !!result.btBlindMode;
-  if (result.btPersonality && PERSONALITY_KEYS.includes(result.btPersonality)) {
-    activePersonality = result.btPersonality;
+  if (result.btComposition) {
+    try { activeComposition = JSON.parse(result.btComposition); } catch (e) { }
   }
 });
+// Pre-load blocks
+initBlockRegistry();
 
 // Extract context from current Boilerexams question page
 async function getQuestionContext() {
@@ -158,7 +170,7 @@ async function extractAllImages(qData) {
       const imgRes = (choice.resources || []).filter(r => r.type === "IMAGE" && r.data && r.data.url);
       for (const r of imgRes) {
         const dataUrl = await fetchImageAsDataUrl(r.data.url, choiceImages.length);
-        if (dataUrl) choiceImages.push({ dataUrl, label: letters[i] || `Choice ${i+1}` });
+        if (dataUrl) choiceImages.push({ dataUrl, label: letters[i] || `Choice ${i + 1}` });
         if (choiceImages.length >= MAX_IMAGES) break;
       }
       // Also scan choice HTML body for inline images
@@ -170,7 +182,7 @@ async function extractAllImages(qData) {
           const src = img.src || img.getAttribute('src');
           if (!src) continue;
           const dataUrl = await fetchImageAsDataUrl(src, choiceImages.length);
-          if (dataUrl) choiceImages.push({ dataUrl, label: letters[i] || `Choice ${i+1}` });
+          if (dataUrl) choiceImages.push({ dataUrl, label: letters[i] || `Choice ${i + 1}` });
           if (choiceImages.length >= MAX_IMAGES) break;
         }
       }
@@ -199,6 +211,9 @@ function setupPort() {
         break;
       case 'error':
         addMessage(`Error: ${msg.payload.message || 'Unknown error'}`);
+        currentResSpan = null;
+        isGenerating = false;
+        if (setGenerating) setGenerating(false);
         break;
     }
   });
@@ -224,14 +239,19 @@ async function queryModel(text) {
     addMessage("System: Please load a model first.");
     return;
   }
-  
+
+  // Reset any in-flight response span so its output cannot bleed into this new query
+  currentResSpan = null;
+  isGenerating = true;
+  if (setGenerating) setGenerating(true);
+
   const contextData = await getQuestionContext();
   let finalQuery = text;
   let questionImages = [];
   let choiceImages = [];
-  
-  // Load personality system prompt
-  const systemPrompt = await loadPersonality(activePersonality);
+
+  // Assemble system prompt from active block composition
+  const systemPrompt = assemblePrompt(activeComposition);
 
   if (contextData) {
     const contextString = formatContextString(contextData);
@@ -302,9 +322,9 @@ function createMessageWrapper(isUser, isSystem, initialText = "") {
     wrapper.style.alignSelf = 'flex-start';
     wrapper.style.background = '#f1f1f1';
     wrapper.style.color = '#000';
-    wrapper.style.fontFamily = 'monospace, sans-serif'; 
+    wrapper.style.fontFamily = 'monospace, sans-serif';
   }
-  
+
   wrapper._rawText = initialText;
 
   let prefix = null;
@@ -359,7 +379,7 @@ function createMessageWrapper(isUser, isSystem, initialText = "") {
     editContainer.style.flexDirection = 'column';
     editContainer.style.gap = '5px';
     editContainer.style.marginTop = '5px';
-    
+
     const textarea = document.createElement('textarea');
     textarea.style.width = '100%';
     textarea.style.resize = 'vertical';
@@ -367,7 +387,7 @@ function createMessageWrapper(isUser, isSystem, initialText = "") {
     textarea.style.fontFamily = 'inherit';
     textarea.style.padding = '5px';
     textarea.style.color = '#000';
-    
+
     const btnRow = document.createElement('div');
     btnRow.style.display = 'flex';
     btnRow.style.justifyContent = 'flex-end';
@@ -391,7 +411,7 @@ function createMessageWrapper(isUser, isSystem, initialText = "") {
       actionMenu.style.display = 'none';
       if (prefix) prefix.style.display = 'none';
       contentSpan.style.display = 'none';
-      
+
       textarea.value = wrapper._rawText;
       editContainer.style.display = 'flex';
     });
@@ -405,7 +425,7 @@ function createMessageWrapper(isUser, isSystem, initialText = "") {
     saveBtn.addEventListener('click', () => {
       wrapper._rawText = textarea.value;
       contentSpan.innerHTML = parseMarkdown(textarea.value);
-      
+
       editContainer.style.display = 'none';
       if (prefix) prefix.style.display = 'inline';
       contentSpan.style.display = 'inline';
@@ -435,6 +455,8 @@ function handleResult(payload) {
 
   if (payload.complete) {
     currentResSpan = null;
+    isGenerating = false;
+    if (setGenerating) setGenerating(false);
   }
 }
 
@@ -462,7 +484,7 @@ function injectUI() {
     link.href = 'https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css';
     document.head.appendChild(link);
   }
-  
+
   const style = document.createElement('style');
   style.textContent = `
     .boiler-tai-md-wrapper p { margin: 0; padding: 0 0 8px 0; }
@@ -518,14 +540,14 @@ function injectUI() {
   // Explicit DOM Resizers
   const edgeSize = 10;
   const resizers = {
-    top: { cursor: 'ns-resize', w: '100%', h: edgeSize+'px', t: -edgeSize/2, l: 0 },
-    right: { cursor: 'ew-resize', w: edgeSize+'px', h: '100%', t: 0, r: -edgeSize/2 },
-    bottom: { cursor: 'ns-resize', w: '100%', h: edgeSize+'px', b: -edgeSize/2, l: 0 },
-    left: { cursor: 'ew-resize', w: edgeSize+'px', h: '100%', t: 0, l: -edgeSize/2 },
-    topleft: { cursor: 'nwse-resize', w: edgeSize*2+'px', h: edgeSize*2+'px', t: -edgeSize, l: -edgeSize, z: 2 },
-    topright: { cursor: 'nesw-resize', w: edgeSize*2+'px', h: edgeSize*2+'px', t: -edgeSize, r: -edgeSize, z: 2 },
-    bottomleft: { cursor: 'nesw-resize', w: edgeSize*2+'px', h: edgeSize*2+'px', b: -edgeSize, l: -edgeSize, z: 2 },
-    bottomright: { cursor: 'nwse-resize', w: edgeSize*2+'px', h: edgeSize*2+'px', b: -edgeSize, r: -edgeSize, z: 2 }
+    top: { cursor: 'ns-resize', w: '100%', h: edgeSize + 'px', t: -edgeSize / 2, l: 0 },
+    right: { cursor: 'ew-resize', w: edgeSize + 'px', h: '100%', t: 0, r: -edgeSize / 2 },
+    bottom: { cursor: 'ns-resize', w: '100%', h: edgeSize + 'px', b: -edgeSize / 2, l: 0 },
+    left: { cursor: 'ew-resize', w: edgeSize + 'px', h: '100%', t: 0, l: -edgeSize / 2 },
+    topleft: { cursor: 'nwse-resize', w: edgeSize * 2 + 'px', h: edgeSize * 2 + 'px', t: -edgeSize, l: -edgeSize, z: 2 },
+    topright: { cursor: 'nesw-resize', w: edgeSize * 2 + 'px', h: edgeSize * 2 + 'px', t: -edgeSize, r: -edgeSize, z: 2 },
+    bottomleft: { cursor: 'nesw-resize', w: edgeSize * 2 + 'px', h: edgeSize * 2 + 'px', b: -edgeSize, l: -edgeSize, z: 2 },
+    bottomright: { cursor: 'nwse-resize', w: edgeSize * 2 + 'px', h: edgeSize * 2 + 'px', b: -edgeSize, r: -edgeSize, z: 2 }
   };
 
   Object.keys(resizers).forEach(key => {
@@ -549,7 +571,7 @@ function injectUI() {
       e.stopPropagation();
       const startX = e.clientX;
       const startY = e.clientY;
-      
+
       const rect = chatWindow.getBoundingClientRect();
       const startW = rect.width;
       const startH = rect.height;
@@ -660,41 +682,17 @@ function injectUI() {
   });
   updateBlindBtn();
 
-  // Personality picker
-  const personalitySelect = document.createElement('select');
-  personalitySelect.style.padding = '3px 6px';
-  personalitySelect.style.border = 'none';
-  personalitySelect.style.borderRadius = '8px';
-  personalitySelect.style.cursor = 'pointer';
-  personalitySelect.style.fontSize = '11px';
-  personalitySelect.style.fontWeight = '600';
-  personalitySelect.style.background = 'rgba(255,255,255,0.15)';
-  personalitySelect.style.color = '#ceb888';
-  personalitySelect.style.maxWidth = '110px';
-  personalitySelect.title = 'AI Personality';
-  personalitySelect.addEventListener('mousedown', e => e.stopPropagation());
-  PERSONALITY_KEYS.forEach(key => {
-    const opt = document.createElement('option');
-    opt.value = key;
-    opt.textContent = PERSONALITY_LABELS[key] || key;
-    if (key === activePersonality) opt.selected = true;
-    personalitySelect.appendChild(opt);
-  });
-  personalitySelect.addEventListener('change', () => {
-    activePersonality = personalitySelect.value;
-    chrome.storage.local.set({ btPersonality: activePersonality });
-    // Pre-warm the cache
-    loadPersonality(activePersonality);
-  });
-  // Sync initial value once storage loads
-  chrome.storage.local.get(['btPersonality'], (r) => {
-    if (r.btPersonality) personalitySelect.value = r.btPersonality;
-  });
+  // Prompt tab (added to tabRow)
+  const promptTab = document.createElement('button');
+  promptTab.innerText = '🧩';
+  promptTab.title = 'Prompt Composer';
+  tabStyle(promptTab, false);
+  promptTab.addEventListener('mousedown', e => e.stopPropagation());
+  tabRow.appendChild(promptTab);
 
   header.appendChild(titleSpan);
   header.appendChild(tabRow);
   header.appendChild(blindBtn);
-  header.appendChild(personalitySelect);
 
   // Drag logic
   let isDragging = false;
@@ -704,14 +702,14 @@ function injectUI() {
   header.addEventListener('mousedown', (e) => {
     isDragging = true;
     header.style.cursor = 'grabbing';
-    
+
     // Switch from bottom/right to top/left if not already
     const rect = chatWindow.getBoundingClientRect();
     chatWindow.style.bottom = 'auto';
     chatWindow.style.right = 'auto';
     chatWindow.style.top = rect.top + 'px';
     chatWindow.style.left = rect.left + 'px';
-    
+
     dragOffsetX = e.clientX - rect.left;
     dragOffsetY = e.clientY - rect.top;
     e.preventDefault();
@@ -741,7 +739,7 @@ function injectUI() {
 
   const modelInput = document.createElement('input');
   modelInput.type = 'text';
-  modelInput.value = 'gemma3-1b-it-int4-web.task';
+  modelInput.value = 'gemma-3n-E2B-it-int4-Web.litertlm';
   modelInput.style.flex = '1';
   modelInput.style.padding = '8px';
   modelInput.style.border = '1px solid #ccc';
@@ -850,9 +848,34 @@ function injectUI() {
   sendBtn.style.cursor = 'pointer';
   sendBtn.style.fontWeight = 'bold';
 
+  const stopBtn = document.createElement('button');
+  stopBtn.innerText = '⏹';
+  stopBtn.title = 'Stop generation';
+  stopBtn.style.padding = '10px 14px';
+  stopBtn.style.background = '#c0392b';
+  stopBtn.style.color = '#fff';
+  stopBtn.style.border = 'none';
+  stopBtn.style.borderRadius = '20px';
+  stopBtn.style.cursor = 'pointer';
+  stopBtn.style.fontWeight = 'bold';
+  stopBtn.style.display = 'none';
+  stopBtn.onclick = () => {
+    if (contentPort) contentPort.postMessage({ type: 'cancel' });
+    currentResSpan = null;
+    isGenerating = false;
+    setGenerating(false);
+  };
+
+  // Wire up the generating toggle once both buttons exist
+  setGenerating = (generating) => {
+    sendBtn.style.display = generating ? 'none' : 'inline-block';
+    stopBtn.style.display = generating ? 'inline-block' : 'none';
+  };
+
   rowDiv.appendChild(uploadBtn);
   rowDiv.appendChild(textInput);
   rowDiv.appendChild(sendBtn);
+  rowDiv.appendChild(stopBtn);
 
   inputArea.appendChild(previewImg);
   inputArea.appendChild(rowDiv);
@@ -1134,27 +1157,228 @@ function injectUI() {
     await queryModel(gradePrompt);
   });
 
-  // Tab switching logic
-  chatTab.addEventListener('click', () => {
-    chatContent.style.display = 'flex';
-    scratchpadContent.style.display = 'none';
-    tabStyle(chatTab, true);
-    tabStyle(padTab, false);
-  });
+  // ─── Prompt Composer Panel ─────────────────────────────────────────────
+  const promptPanel = document.createElement('div');
+  promptPanel.style.cssText = 'display:none;flex-direction:column;height:100%;background:#111;color:#e0e0e0;font-size:12px;overflow:hidden;';
 
+  function makeSection(titleText, flex) {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex;flex-direction:column;flex:' + flex + ';overflow:hidden;border-bottom:1px solid #333;min-height:0;';
+    const hdr = document.createElement('div');
+    hdr.style.cssText = 'padding:5px 10px;font-weight:700;font-size:10px;color:#ceb888;background:#1a1a1a;letter-spacing:.5px;text-transform:uppercase;flex-shrink:0;';
+    hdr.textContent = titleText;
+    const body = document.createElement('div');
+    body.style.cssText = 'flex:1;overflow-y:auto;padding:2px 0;min-height:0;';
+    wrap.appendChild(hdr);
+    wrap.appendChild(body);
+    return { wrap, body };
+  }
+
+  const libSec = makeSection('Library', 1);
+  const treeSec = makeSection('Active Composition', 1);
+
+  // ── Library ──
+  function renderLibrary() {
+    libSec.body.innerHTML = '';
+    const byCat = {};
+    BLOCK_IDS.forEach(id => {
+      const b = blockRegistry[id]; if (!b) return;
+      (byCat[b.category] = byCat[b.category] || []).push(b);
+    });
+    Object.entries(CATEGORY_LABELS).forEach(([cat, label]) => {
+      if (!byCat[cat]) return;
+      const catEl = document.createElement('div');
+      catEl.style.cssText = 'padding:3px 10px 1px;font-size:10px;color:#777;font-weight:700;';
+      catEl.textContent = label;
+      libSec.body.appendChild(catEl);
+      byCat[cat].forEach(block => {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;gap:5px;padding:3px 10px;cursor:grab;border-radius:5px;margin:1px 3px;';
+        row.draggable = true;
+        row.title = block.description || '';
+        row.onmouseover = () => row.style.background = '#1e1e1e';
+        row.onmouseout = () => row.style.background = '';
+        const grip = document.createElement('span'); grip.textContent = '\u2261'; grip.style.cssText = 'color:#555;font-size:13px;';
+        const name = document.createElement('span'); name.textContent = block.name; name.style.cssText = 'flex:1;font-size:11px;';
+        const addBtn = document.createElement('button');
+        addBtn.textContent = '+';
+        addBtn.style.cssText = 'padding:0 5px;border:none;border-radius:4px;background:#ceb888;color:#000;cursor:pointer;font-weight:700;font-size:12px;flex-shrink:0;';
+        addBtn.onmousedown = e => e.stopPropagation();
+        addBtn.onclick = e => {
+          e.stopPropagation();
+          const indent = activeComposition.length ? activeComposition[activeComposition.length - 1].indent : 0;
+          activeComposition.push({ id: block.id, indent });
+          chrome.storage.local.set({ btComposition: JSON.stringify(activeComposition) });
+          renderTree();
+        };
+        row.ondragstart = e => {
+          e.dataTransfer.setData('btBlockId', block.id);
+          e.dataTransfer.setData('btSource', 'library');
+          e.dataTransfer.effectAllowed = 'copy';
+        };
+        row.appendChild(grip); row.appendChild(name); row.appendChild(addBtn);
+        libSec.body.appendChild(row);
+      });
+    });
+  }
+
+  // ── Tree ──
+  let dragSrcIdx = -1;
+  function saveComp() { chrome.storage.local.set({ btComposition: JSON.stringify(activeComposition) }); }
+
+  function renderTree() {
+    treeSec.body.innerHTML = '';
+    if (!activeComposition.length) {
+      const empty = document.createElement('div');
+      empty.style.cssText = 'padding:10px;color:#444;font-style:italic;font-size:11px;';
+      empty.textContent = 'Drag blocks from library or click + to add.';
+      treeSec.body.appendChild(empty);
+    }
+    activeComposition.forEach((item, idx) => {
+      const block = blockRegistry[item.id]; if (!block) return;
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:3px;padding:3px 6px;border-radius:5px;margin:1px 3px;cursor:grab;margin-left:' + (6 + item.indent * 14) + 'px;';
+      row.draggable = true;
+      row.onmouseover = () => row.style.background = '#1d1d1d';
+      row.onmouseout = () => row.style.background = '';
+      row.ondragstart = e => {
+        dragSrcIdx = idx;
+        e.dataTransfer.setData('btBlockId', item.id); e.dataTransfer.setData('btSource', 'tree');
+        e.dataTransfer.effectAllowed = 'move';
+        setTimeout(() => row.style.opacity = '0.4', 0);
+      };
+      row.ondragend = () => row.style.opacity = '';
+      row.ondragover = e => { e.preventDefault(); row.style.background = '#2a2a2a'; };
+      row.ondragleave = () => row.style.background = '';
+      row.ondrop = e => {
+        e.preventDefault(); row.style.background = '';
+        const src = e.dataTransfer.getData('btSource');
+        const bid = e.dataTransfer.getData('btBlockId');
+        if (src === 'tree' && dragSrcIdx !== -1 && dragSrcIdx !== idx) {
+          const [m] = activeComposition.splice(dragSrcIdx, 1);
+          activeComposition.splice(dragSrcIdx < idx ? idx - 1 : idx, 0, m);
+          dragSrcIdx = -1;
+        } else if (src === 'library') {
+          activeComposition.splice(idx, 0, { id: bid, indent: item.indent });
+        }
+        saveComp(); renderTree();
+      };
+      const grip = document.createElement('span'); grip.textContent = '\u2261'; grip.style.cssText = 'color:#555;font-size:13px;flex-shrink:0;';
+      const badge = document.createElement('span'); badge.textContent = block.category; badge.style.cssText = 'font-size:9px;padding:1px 3px;border-radius:3px;background:#2a2a2a;color:#999;flex-shrink:0;';
+      const name = document.createElement('span'); name.textContent = block.name; name.style.cssText = 'flex:1;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+      const mkIB = (t, tip, fn) => {
+        const b = document.createElement('button');
+        b.textContent = t; b.title = tip;
+        b.style.cssText = 'border:none;background:transparent;color:#666;cursor:pointer;padding:0 2px;font-size:11px;flex-shrink:0;';
+        b.onmousedown = e => e.stopPropagation(); b.onclick = e => { e.stopPropagation(); fn(); };
+        return b;
+      };
+      const dedent = mkIB('\u2190', 'Decrease indent', () => { if (item.indent > 0) { item.indent--; saveComp(); renderTree(); } });
+      const indent = mkIB('\u2192', 'Increase indent', () => { item.indent++; saveComp(); renderTree(); });
+      const rem = mkIB('\u00d7', 'Remove', () => { activeComposition.splice(idx, 1); saveComp(); renderTree(); });
+      rem.style.color = '#a44';
+      row.appendChild(grip); row.appendChild(badge); row.appendChild(name);
+      row.appendChild(dedent); row.appendChild(indent); row.appendChild(rem);
+      treeSec.body.appendChild(row);
+    });
+    // Append drop zone
+    const dz = document.createElement('div');
+    dz.style.cssText = 'height:28px;margin:3px;border:1px dashed #2a2a2a;border-radius:5px;display:flex;align-items:center;justify-content:center;color:#3a3a3a;font-size:10px;';
+    dz.textContent = 'Drop to append';
+    dz.ondragover = e => { e.preventDefault(); dz.style.borderColor = '#ceb888'; dz.style.color = '#ceb888'; };
+    dz.ondragleave = () => { dz.style.borderColor = '#2a2a2a'; dz.style.color = '#3a3a3a'; };
+    dz.ondrop = e => {
+      e.preventDefault(); dz.style.borderColor = '#2a2a2a'; dz.style.color = '#3a3a3a';
+      const src = e.dataTransfer.getData('btSource');
+      const bid = e.dataTransfer.getData('btBlockId');
+      if (src === 'tree' && dragSrcIdx !== -1) { const [m] = activeComposition.splice(dragSrcIdx, 1); activeComposition.push(m); dragSrcIdx = -1; }
+      else if (src === 'library') { activeComposition.push({ id: bid, indent: 0 }); }
+      saveComp(); renderTree();
+    };
+    treeSec.body.appendChild(dz);
+  }
+
+  // ── Footer ──
+  const footerSec = document.createElement('div');
+  footerSec.style.cssText = 'flex-shrink:0;padding:5px 7px;border-top:1px solid #333;background:#1a1a1a;display:flex;flex-direction:column;gap:3px;';
+  const fbRow = document.createElement('div');
+  fbRow.style.cssText = 'display:flex;gap:3px;flex-wrap:wrap;';
+  const mkFBtn = (t, fn, danger) => {
+    const b = document.createElement('button');
+    b.textContent = t;
+    b.style.cssText = 'padding:2px 7px;border:none;border-radius:4px;cursor:pointer;font-size:11px;font-weight:600;background:' + (danger ? '#3a1010' : '#222') + ';color:' + (danger ? '#f77' : '#ceb888') + ';';
+    b.onmousedown = e => e.stopPropagation(); b.onclick = fn; return b;
+  };
+  const previewBox = document.createElement('pre');
+  previewBox.style.cssText = 'display:none;font-size:9px;color:#999;white-space:pre-wrap;word-break:break-word;max-height:72px;overflow-y:auto;margin:0;background:#0d0d0d;padding:3px 6px;border-radius:3px;';
+  const savedList = document.createElement('div');
+  savedList.style.cssText = 'display:flex;flex-wrap:wrap;gap:3px;max-height:40px;overflow-y:auto;';
+
+  function renderSavedList() {
+    chrome.storage.local.get(['btSaved'], r => {
+      savedList.innerHTML = '';
+      Object.keys(r.btSaved || {}).forEach(name => {
+        const c = document.createElement('button');
+        c.textContent = name; c.title = 'Load';
+        c.style.cssText = 'padding:1px 5px;border:none;border-radius:3px;background:#222;color:#ceb888;cursor:pointer;font-size:10px;';
+        c.onmousedown = e => e.stopPropagation();
+        c.onclick = () => { activeComposition = (r.btSaved[name] || []).map(x => ({ ...x })); saveComp(); renderTree(); };
+        savedList.appendChild(c);
+      });
+    });
+  }
+
+  fbRow.appendChild(mkFBtn('Save as…', () => {
+    const n = prompt('Composition name:'); if (!n) return;
+    chrome.storage.local.get(['btSaved'], r => {
+      const s = r.btSaved || {}; s[n] = [...activeComposition];
+      chrome.storage.local.set({ btSaved: s }); renderSavedList();
+    });
+  }));
+  fbRow.appendChild(mkFBtn('Clear', () => { activeComposition = []; saveComp(); renderTree(); }, true));
+  let pvOpen = false;
+  fbRow.appendChild(mkFBtn('Preview', () => {
+    pvOpen = !pvOpen;
+    previewBox.style.display = pvOpen ? 'block' : 'none';
+    if (pvOpen) previewBox.textContent = assemblePrompt(activeComposition) || '(empty composition)';
+  }));
+  footerSec.appendChild(fbRow);
+  footerSec.appendChild(previewBox);
+  const savedHdr = document.createElement('div'); savedHdr.style.cssText = 'font-size:9px;color:#555;'; savedHdr.textContent = 'Saved:';
+  footerSec.appendChild(savedHdr);
+  footerSec.appendChild(savedList);
+  renderSavedList();
+
+  promptPanel.appendChild(libSec.wrap);
+  promptPanel.appendChild(treeSec.wrap);
+  promptPanel.appendChild(footerSec);
+
+  // ─── Tab switching ──────────────────────────────────────────────────────
+  chatTab.addEventListener('click', () => {
+    chatContent.style.display = 'flex'; scratchpadContent.style.display = 'none'; promptPanel.style.display = 'none';
+    tabStyle(chatTab, true); tabStyle(padTab, false); tabStyle(promptTab, false);
+  });
   padTab.addEventListener('click', () => {
-    chatContent.style.display = 'none';
-    scratchpadContent.style.display = 'flex';
-    tabStyle(padTab, true);
-    tabStyle(chatTab, false);
+    chatContent.style.display = 'none'; scratchpadContent.style.display = 'flex'; promptPanel.style.display = 'none';
+    tabStyle(padTab, true); tabStyle(chatTab, false); tabStyle(promptTab, false);
     if (spMode === 'draw') setTimeout(resizeCanvas, 50);
   });
+  promptTab.addEventListener('click', () => {
+    chatContent.style.display = 'none'; scratchpadContent.style.display = 'none'; promptPanel.style.display = 'flex';
+    tabStyle(promptTab, true); tabStyle(chatTab, false); tabStyle(padTab, false);
+    // Re-render in case blocks just finished loading
+    renderLibrary(); renderTree(); renderSavedList();
+  });
+
+  // Render library after pre-load (500ms head-start from initBlockRegistry at top)
+  setTimeout(() => { renderLibrary(); renderTree(); }, 600);
 
   // Assemble chatWindow
   chatWindow.appendChild(header);
   chatWindow.appendChild(controlsDiv);
   chatWindow.appendChild(chatContent);
   chatWindow.appendChild(scratchpadContent);
+  chatWindow.appendChild(promptPanel);
   document.body.appendChild(chatWindow);
 
   // Event Listeners

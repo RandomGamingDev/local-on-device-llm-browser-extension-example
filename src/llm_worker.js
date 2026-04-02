@@ -25,7 +25,7 @@ async function initialize(modelStream, wasmUrl, modelName) {
 
   const options = {
     baseOptions: { modelAssetBuffer: modelStream },
-    maxTokens: 2048,
+    maxTokens: 8192,
   };
 
   if (isMultimodal) {

@@ -39,7 +39,8 @@
       "resources": [
         "resources/*",
         "wasm/*",
-        "personalities/*"
+        "personalities/*",
+        "personalities/blocks/*"
       ],
       "matches": [
         "<all_urls>"

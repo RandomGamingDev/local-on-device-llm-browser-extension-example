@@ -72,7 +72,7 @@ function splitFile(srcPath, destDir, originalName) {
 const srcDir = path.resolve(__dirname, '../resources');
 const destDir = path.resolve(__dirname, '../dist/resources');
 
-// Copy personalities directory
+// Copy personalities directory and blocks subdirectory
 const personalitiesSrc = path.resolve(__dirname, '../personalities');
 const personalitiesDest = path.resolve(__dirname, '../dist/personalities');
 
