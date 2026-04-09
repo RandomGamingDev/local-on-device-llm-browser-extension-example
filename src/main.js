@@ -739,7 +739,7 @@ function injectUI() {
 
   const modelInput = document.createElement('input');
   modelInput.type = 'text';
-  modelInput.value = 'gemma-3n-E2B-it-int4-Web.litertlm';
+  modelInput.value = 'gemma-4-E2B-it.litertlm';
   modelInput.style.flex = '1';
   modelInput.style.padding = '8px';
   modelInput.style.border = '1px solid #ccc';

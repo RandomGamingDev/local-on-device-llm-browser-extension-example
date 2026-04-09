@@ -16,23 +16,89 @@ async function dataUrlToBitmap(dataUrl) {
 }
 
 let llmInference = null;
+let currentModelName = '';
+
+function isGemma4(modelName) {
+  const n = (modelName || '').toLowerCase();
+  return n.includes('gemma-4') || n.includes('gemma4');
+}
+
+function isMultimodal(modelName) {
+  const n = (modelName || '').toLowerCase();
+  // .litertlm bundles always include the full vision encoder (Gemma 3n, Gemma 4, etc.)
+  // .task web bundles for Gemma 4 are text-only — vision calculator is missing.
+  return n.includes('3n') || n.endsWith('.litertlm');
+}
+
 async function initialize(modelStream, wasmUrl, modelName) {
   const genaiFileset = await FilesetResolver.forGenAiTasks(wasmUrl);
-
-  const isMultimodal = modelName && (
-    modelName.toLowerCase().includes('3n') || modelName.toLowerCase().includes('e2b')
-  );
+  currentModelName = modelName || '';
 
   const options = {
     baseOptions: { modelAssetBuffer: modelStream },
     maxTokens: 8192,
   };
 
-  if (isMultimodal) {
+  if (isMultimodal(currentModelName)) {
     options.maxNumImages = 5;
   }
 
   llmInference = await LlmInference.createFromOptions(genaiFileset, options);
+}
+
+// Build a text-only prompt string using the correct control tokens for the model.
+function buildTextPrompt(systemPrompt, query, modelName) {
+  if (isGemma4(modelName)) {
+    // Gemma 4 format: <|turn>role content<turn|>
+    const sysTurn = systemPrompt ? `<|turn>system\n${systemPrompt}<turn|>\n` : '';
+    return `${sysTurn}<|turn>user\n${query}<turn|>\n<|turn>model\n`;
+  } else {
+    // Legacy Gemma 1/2/3 format: <start_of_turn>role\ncontent<end_of_turn>
+    const systemBlock = systemPrompt ? `${systemPrompt}\n\n` : '';
+    return `<start_of_turn>user\n${systemBlock}${query}<end_of_turn>\n<start_of_turn>model\n`;
+  }
+}
+
+// Build a multi-modal promptParts array using the correct control tokens.
+function buildMultimodalParts(systemPrompt, query, qBitmaps, cBitmaps, choiceImages, modelName) {
+  const parts = [];
+
+  if (isGemma4(modelName)) {
+    const sysTurn = systemPrompt ? `<|turn>system\n${systemPrompt}<turn|>\n` : '';
+    parts.push(`${sysTurn}<|turn>user\n`);
+  } else {
+    const systemBlock = systemPrompt ? `${systemPrompt}\n\n` : '';
+    parts.push(`<start_of_turn>user\n${systemBlock}`);
+  }
+
+  if (qBitmaps.length === 1) {
+    parts.push('Question diagram:\n');
+    parts.push({ imageSource: qBitmaps[0] });
+    parts.push('\n');
+  } else {
+    qBitmaps.forEach((bm, i) => {
+      parts.push(`Question diagram ${i + 1}:\n`);
+      parts.push({ imageSource: bm });
+      parts.push('\n');
+    });
+  }
+
+  if (cBitmaps.length > 0) {
+    parts.push('\nAnswer choice images:\n');
+    cBitmaps.forEach((bm, i) => {
+      parts.push(`Answer choice ${choiceImages[i].label}:\n`);
+      parts.push({ imageSource: bm });
+      parts.push('\n');
+    });
+  }
+
+  if (isGemma4(modelName)) {
+    parts.push('\n' + query + '<turn|>\n<|turn>model\n');
+  } else {
+    parts.push('\n' + query + '<end_of_turn>\n<start_of_turn>model\n');
+  }
+
+  return parts;
 }
 
 self.onmessage = async (event) => {
@@ -52,45 +118,19 @@ self.onmessage = async (event) => {
       case "query":
         try {
           const systemPrompt = payload.systemPrompt || '';
-          const systemBlock = systemPrompt ? `${systemPrompt}\n\n` : '';
-
           const questionImages = payload.questionImages || payload.images || (payload.image ? [payload.image] : []);
           const choiceImages = payload.choiceImages || [];
           const hasImages = questionImages.length > 0 || choiceImages.length > 0;
 
-          if (hasImages) {
+          if (hasImages && isMultimodal(currentModelName)) {
             const qBitmaps = await Promise.all(questionImages.map(dataUrlToBitmap));
             const cBitmaps = await Promise.all(choiceImages.map(c => dataUrlToBitmap(c.dataUrl)));
-
-            // System prompt goes at the top of the user turn
-            const promptParts = [`<start_of_turn>user\n${systemBlock}`];
-
-            if (qBitmaps.length === 1) {
-              promptParts.push('Question diagram:\n');
-              promptParts.push({ imageSource: qBitmaps[0] });
-              promptParts.push('\n');
-            } else if (qBitmaps.length > 1) {
-              qBitmaps.forEach((bm, i) => {
-                promptParts.push(`Question diagram ${i + 1}:\n`);
-                promptParts.push({ imageSource: bm });
-                promptParts.push('\n');
-              });
-            }
-
-            if (cBitmaps.length > 0) {
-              promptParts.push('\nAnswer choice images:\n');
-              cBitmaps.forEach((bm, i) => {
-                promptParts.push(`Answer choice ${choiceImages[i].label}:\n`);
-                promptParts.push({ imageSource: bm });
-                promptParts.push('\n');
-              });
-            }
-
-            promptParts.push('\n' + payload.query + '<end_of_turn>\n<start_of_turn>model\n');
-            await llmInference.generateResponse(promptParts, returnPartialResults);
+            const parts = buildMultimodalParts(systemPrompt, payload.query, qBitmaps, cBitmaps, choiceImages, currentModelName);
+            await llmInference.generateResponse(parts, returnPartialResults);
           } else {
-            const formattedQuery = `<start_of_turn>user\n${systemBlock}${payload.query}<end_of_turn>\n<start_of_turn>model\n`;
-            await llmInference.generateResponse(formattedQuery, returnPartialResults);
+            if (hasImages) console.warn('Worker: Model does not support images — falling back to text-only.');
+            const prompt = buildTextPrompt(systemPrompt, payload.query, currentModelName);
+            await llmInference.generateResponse(prompt, returnPartialResults);
           }
         } catch (e) {
           console.error("Worker: Error generating response", e);

@@ -40,10 +40,10 @@ port.onMessage.addListener(async (msg) => {
           const manifest = await manifestResp.json();
           console.log(`Found split configuration for ${msg.payload.modelName}. Parts: ${manifest.parts.length}`);
 
-          // Re-create writable as it might have been closed or not used if the initial `writable` was for a single file.
-          // This ensures we start fresh for stitching.
           fileHandle = await root.getFileHandle(msg.payload.modelName, { create: true });
-          const newWritable = await fileHandle.createWritable(); // Use a new variable name to avoid conflict
+          let newWritable = await fileHandle.createWritable();
+          let bytesWritten = 0;
+          const FLUSH_EVERY_PARTS = 10; // close+reopen every N parts to let OPFS flush to disk
 
           for (let i = 0; i < manifest.parts.length; i++) {
             const partName = manifest.parts[i];
@@ -52,13 +52,29 @@ port.onMessage.addListener(async (msg) => {
             const partResp = await fetch(partUrl);
             if (!partResp.ok) throw new Error(`Failed to fetch part ${partName}`);
 
-            const partBlob = await partResp.blob();
-            await newWritable.write(partBlob);
+            // Stream the response body chunk-by-chunk instead of loading the whole part as a blob.
+            // This keeps peak memory near the stream's internal buffer (~64KB) rather than 50MB.
+            const reader = partResp.body.getReader();
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              await newWritable.write(value);
+              bytesWritten += value.byteLength;
+            }
 
             console.log(`Stitched part ${i + 1}/${manifest.parts.length}: ${partName}`);
 
-            // Allow GC
-            await new Promise(r => setTimeout(r, 10));
+            // Every FLUSH_EVERY_PARTS parts, close the writable and reopen it so OPFS can
+            // flush buffered data to disk, releasing memory held by the writable pipe.
+            if ((i + 1) % FLUSH_EVERY_PARTS === 0 && i + 1 < manifest.parts.length) {
+              await newWritable.close();
+              newWritable = await fileHandle.createWritable({ keepExistingData: true });
+              await newWritable.seek(bytesWritten);
+              console.log(`[OPFS flush] Reopened writable at offset ${(bytesWritten / 1024 / 1024).toFixed(1)} MB`);
+            }
+
+            // Yield to the event loop so Chrome can GC and process other tasks
+            await new Promise(r => setTimeout(r, 0));
           }
 
           await newWritable.close();
