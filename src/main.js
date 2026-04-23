@@ -6,6 +6,8 @@ marked.use(markedKatex({ throwOnError: false }));
 
 let contentPort = null;
 let isModelReady = false;
+let isVisionReady = false;      // true when Gemma 3n supplement is loaded
+let visionModelName = 'gemma-3n-E2B-it-int4-Web.litertlm'; // default vision model
 let currentResSpan = null;
 let currentImageDataUrl = null;
 let isGenerating = false;
@@ -203,8 +205,16 @@ function setupPort() {
   contentPort.onMessage.addListener((msg) => {
     switch (msg.type) {
       case 'init':
-        addMessage(`System: Model loaded successfully!`);
+        addMessage(`System: Primary model loaded successfully!`);
         isModelReady = true;
+        break;
+      case 'init_vision':
+        if (msg.payload.isSuccess) {
+          isVisionReady = true;
+          addMessage(`System: Vision supplement (Gemma 3n) loaded! Image queries will now use it.`);
+        } else {
+          addMessage(`System: Vision supplement failed to load: ${msg.payload.error || 'unknown error'}`);
+        }
         break;
       case 'result':
         handleResult(msg.payload);
@@ -225,13 +235,22 @@ function setupPort() {
   });
 }
 
-function initModel(modelName) {
+function initModel(modelName, withVision, visionName) {
   setupPort();
   addMessage(`System: Initializing model ${modelName}... Please wait.`);
   contentPort.postMessage({
     type: 'init',
     payload: { modelName }
   });
+  if (withVision) {
+    visionModelName = visionName;
+    isVisionReady = false;
+    addMessage(`System: Also loading vision supplement (${visionName})...`);
+    contentPort.postMessage({
+      type: 'init_vision',
+      payload: { modelName: visionName }
+    });
+  }
 }
 
 async function queryModel(text) {
@@ -276,12 +295,16 @@ async function queryModel(text) {
     if (fileInput) fileInput.value = '';
   }
 
+  const hasImages = questionImages.length > 0 || choiceImages.length > 0;
   const payload = { query: finalQuery, systemPrompt };
   const totalAttached = questionImages.length + choiceImages.length;
   if (totalAttached > 0) {
     payload.questionImages = questionImages;
     payload.choiceImages = choiceImages;
-    addMessage(`System: Attached ${questionImages.length} question image(s) + ${choiceImages.length} answer choice image(s).${blindMode ? ' [Blind mode: choices hidden]' : ''}`);
+    const visionNote = isVisionReady
+      ? ` [Routed to vision model]`
+      : ` [Vision model not loaded — images may be ignored by primary model]`;
+    addMessage(`System: Attached ${questionImages.length} question image(s) + ${choiceImages.length} answer choice image(s).${blindMode ? ' [Blind mode: choices hidden]' : ''}${visionNote}`);
   }
 
   contentPort.postMessage({
@@ -737,9 +760,15 @@ function injectUI() {
   controlsDiv.style.gap = '8px';
   controlsDiv.style.boxSizing = 'border-box';
 
+  // — Primary model row —
+  const primaryRow = document.createElement('div');
+  primaryRow.style.display = 'flex';
+  primaryRow.style.gap = '8px';
+  primaryRow.style.width = '100%';
+
   const modelInput = document.createElement('input');
   modelInput.type = 'text';
-  modelInput.value = 'gemma-4-E2B-it.litertlm';
+  modelInput.value = 'gemma-4-E2B-it-web.task';
   modelInput.style.flex = '1';
   modelInput.style.padding = '8px';
   modelInput.style.border = '1px solid #ccc';
@@ -757,9 +786,63 @@ function injectUI() {
   loadBtn.style.borderRadius = '6px';
   loadBtn.style.cursor = 'pointer';
   loadBtn.style.fontWeight = 'bold';
+  loadBtn.style.flexShrink = '0';
 
-  controlsDiv.appendChild(modelInput);
-  controlsDiv.appendChild(loadBtn);
+  primaryRow.appendChild(modelInput);
+  primaryRow.appendChild(loadBtn);
+
+  // — Vision supplement row —
+  const visionRow = document.createElement('div');
+  visionRow.style.display = 'flex';
+  visionRow.style.gap = '6px';
+  visionRow.style.alignItems = 'center';
+  visionRow.style.width = '100%';
+  visionRow.style.marginTop = '4px';
+
+  const visionCheckbox = document.createElement('input');
+  visionCheckbox.type = 'checkbox';
+  visionCheckbox.id = 'boiler-tai-vision-toggle';
+  visionCheckbox.title = 'Load Gemma 3n as a vision supplement for image queries';
+  visionCheckbox.style.cursor = 'pointer';
+  visionCheckbox.style.flexShrink = '0';
+  visionCheckbox.style.accentColor = '#ceb888';
+
+  const visionLabel = document.createElement('label');
+  visionLabel.htmlFor = 'boiler-tai-vision-toggle';
+  visionLabel.innerText = '🖼 Vision:';
+  visionLabel.style.fontSize = '11px';
+  visionLabel.style.color = '#555';
+  visionLabel.style.cursor = 'pointer';
+  visionLabel.style.flexShrink = '0';
+  visionLabel.style.userSelect = 'none';
+
+  const visionInput = document.createElement('input');
+  visionInput.type = 'text';
+  visionInput.value = 'gemma-3n-E2B-it-int4-Web.litertlm';
+  visionInput.style.flex = '1';
+  visionInput.style.padding = '6px 8px';
+  visionInput.style.border = '1px solid #ccc';
+  visionInput.style.borderRadius = '6px';
+  visionInput.style.fontSize = '11px';
+  visionInput.style.boxSizing = 'border-box';
+  visionInput.style.minWidth = '0';
+  visionInput.style.opacity = '0.45';
+  visionInput.style.transition = 'opacity 0.2s';
+  visionInput.disabled = true;
+
+  // Enable/disable the vision model input based on checkbox
+  visionCheckbox.addEventListener('change', () => {
+    visionInput.disabled = !visionCheckbox.checked;
+    visionInput.style.opacity = visionCheckbox.checked ? '1' : '0.45';
+  });
+
+  visionRow.appendChild(visionCheckbox);
+  visionRow.appendChild(visionLabel);
+  visionRow.appendChild(visionInput);
+
+  controlsDiv.style.flexDirection = 'column';
+  controlsDiv.appendChild(primaryRow);
+  controlsDiv.appendChild(visionRow);
 
   // Message list
   const msgList = document.createElement('div');
@@ -1393,7 +1476,11 @@ function injectUI() {
   };
 
   loadBtn.onclick = () => {
-    initModel(modelInput.value);
+    initModel(
+      modelInput.value,
+      visionCheckbox.checked,
+      visionInput.value.trim() || 'gemma-3n-E2B-it-int4-Web.litertlm'
+    );
   };
 
   const handleSend = () => {

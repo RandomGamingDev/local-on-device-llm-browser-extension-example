@@ -1,143 +1,167 @@
-// Spawn the dedicated worker
+// Spawn the primary worker (text model)
 const worker = new Worker('llm_worker.js');
+
+// Spawn a secondary worker for the Gemma 3n vision supplement
+const visionWorker = new Worker('llm_worker.js');
+let isVisionReady = false;
+let isVisionLoading = false;
 
 // Connect to the Service Worker
 const port = chrome.runtime.connect({ name: 'offscreen' });
 
+// ── Shared OPFS model loader ────────────────────────────────────────────────
+async function loadModelToOPFS(modelName) {
+  const root = await navigator.storage.getDirectory();
+  let fileHandle;
+
+  try {
+    fileHandle = await root.getFileHandle(modelName);
+    const checkFile = await fileHandle.getFile();
+    if (checkFile.size === 0) {
+      console.warn(`[OPFS] ${modelName}: file is empty, re-downloading.`);
+      throw new Error('File empty');
+    }
+    console.log(`[OPFS] ${modelName}: found in cache, size`, checkFile.size);
+  } catch (e) {
+    console.log(`[OPFS] ${modelName}: not in cache, fetching from resources...`);
+
+    const manifestUrl = chrome.runtime.getURL(`resources/models/${modelName}.json`);
+    const manifestResp = await fetch(manifestUrl);
+
+    fileHandle = await root.getFileHandle(modelName, { create: true });
+
+    if (manifestResp.ok) {
+      const manifest = await manifestResp.json();
+      console.log(`[OPFS] ${modelName}: split file, ${manifest.parts.length} parts`);
+
+      let newWritable = await fileHandle.createWritable();
+      let bytesWritten = 0;
+      const FLUSH_EVERY = 10;
+
+      for (let i = 0; i < manifest.parts.length; i++) {
+        const partUrl = chrome.runtime.getURL(`resources/models/${manifest.parts[i]}`);
+        const partResp = await fetch(partUrl);
+        if (!partResp.ok) throw new Error(`Failed to fetch part ${manifest.parts[i]}`);
+
+        const reader = partResp.body.getReader();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          await newWritable.write(value);
+          bytesWritten += value.byteLength;
+        }
+        console.log(`[OPFS] ${modelName}: stitched part ${i + 1}/${manifest.parts.length}`);
+
+        if ((i + 1) % FLUSH_EVERY === 0 && i + 1 < manifest.parts.length) {
+          await newWritable.close();
+          newWritable = await fileHandle.createWritable({ keepExistingData: true });
+          await newWritable.seek(bytesWritten);
+        }
+        await new Promise(r => setTimeout(r, 0));
+      }
+      await newWritable.close();
+    } else {
+      const fileUrl = chrome.runtime.getURL(`resources/models/${modelName}`);
+      const response = await fetch(fileUrl);
+      if (!response.body) throw new Error('Fetch body is null');
+      const writable = await fileHandle.createWritable();
+      const reader = response.body.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        await writable.write(value);
+        await new Promise(r => setTimeout(r, 0));
+      }
+      await writable.close();
+    }
+  }
+
+  const file = await fileHandle.getFile();
+  if (file.size === 0) throw new Error(`${modelName}: size is 0 after write`);
+  return file.stream();
+}
+
 // Relay messages from Service Worker to Web Worker
 port.onMessage.addListener(async (msg) => {
-  if (msg.type === 'init') {
-    // Inject local WASM URL
-    msg.payload.wasmUrl = chrome.runtime.getURL("wasm");
-
-    try {
-      const root = await navigator.storage.getDirectory();
-      let fileHandle;
-
-      try {
-        fileHandle = await root.getFileHandle(msg.payload.modelName);
-        const checkFile = await fileHandle.getFile();
-        if (checkFile.size === 0) {
-          console.warn("Existing model file is empty. Re-downloading.");
-          throw new Error("File empty");
-        }
-        console.log("Found existing model in OPFS. Size:", checkFile.size);
-
-      } catch (e) {
-        console.log("Model not found/empty in OPFS, fetching from resources using chunked-download...");
-
-        const fileUrl = chrome.runtime.getURL(`resources/models/${msg.payload.modelName}`);
-        fileHandle = await root.getFileHandle(msg.payload.modelName, { create: true });
-        const writable = await fileHandle.createWritable();
-
-        // SPLIT-FILE STITCHING STRATEGY
-        // 1. Check if a manifest exists for this model (e.g. model.json)
-        const manifestUrl = chrome.runtime.getURL(`resources/models/${msg.payload.modelName}.json`);
-        const manifestResp = await fetch(manifestUrl);
-
-        if (manifestResp.ok) {
-          // CASE A: Split File (Large Model)
-          const manifest = await manifestResp.json();
-          console.log(`Found split configuration for ${msg.payload.modelName}. Parts: ${manifest.parts.length}`);
-
-          fileHandle = await root.getFileHandle(msg.payload.modelName, { create: true });
-          let newWritable = await fileHandle.createWritable();
-          let bytesWritten = 0;
-          const FLUSH_EVERY_PARTS = 10; // close+reopen every N parts to let OPFS flush to disk
-
-          for (let i = 0; i < manifest.parts.length; i++) {
-            const partName = manifest.parts[i];
-            const partUrl = chrome.runtime.getURL(`resources/models/${partName}`);
-
-            const partResp = await fetch(partUrl);
-            if (!partResp.ok) throw new Error(`Failed to fetch part ${partName}`);
-
-            // Stream the response body chunk-by-chunk instead of loading the whole part as a blob.
-            // This keeps peak memory near the stream's internal buffer (~64KB) rather than 50MB.
-            const reader = partResp.body.getReader();
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              await newWritable.write(value);
-              bytesWritten += value.byteLength;
-            }
-
-            console.log(`Stitched part ${i + 1}/${manifest.parts.length}: ${partName}`);
-
-            // Every FLUSH_EVERY_PARTS parts, close the writable and reopen it so OPFS can
-            // flush buffered data to disk, releasing memory held by the writable pipe.
-            if ((i + 1) % FLUSH_EVERY_PARTS === 0 && i + 1 < manifest.parts.length) {
-              await newWritable.close();
-              newWritable = await fileHandle.createWritable({ keepExistingData: true });
-              await newWritable.seek(bytesWritten);
-              console.log(`[OPFS flush] Reopened writable at offset ${(bytesWritten / 1024 / 1024).toFixed(1)} MB`);
-            }
-
-            // Yield to the event loop so Chrome can GC and process other tasks
-            await new Promise(r => setTimeout(r, 0));
-          }
-
-          await newWritable.close();
-          console.log("Model successfully stitched and cached to OPFS.");
-
-        } else {
-          // CASE B: Single File (Legacy/Small Model)
-          console.log("No manifest found, falling back to single-stream pump.");
-
-          // The initial `fileUrl` and `writable` can be reused here.
-          const response = await fetch(fileUrl);
-          if (!response.body) throw new Error("Fetch response body is null");
-
-          const contentLength = response.headers.get('Content-Length');
-          const totalSize = contentLength ? parseInt(contentLength) : 0;
-
-          console.log(`Starting stream download. Total size: ${totalSize ? (totalSize / 1024 / 1024).toFixed(2) + ' MB' : 'Unknown'}`);
-
-          // The writable from above is already created: `const writable = await fileHandle.createWritable();`
-          // No need to recreate fileHandle or writable here.
-
-          const reader = response.body.getReader();
-          let processedBytes = 0;
-
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            await writable.write(value);
-            processedBytes += value.length;
-
-            if (processedBytes % (50 * 1024 * 1024) < value.length) {
-              console.log(`Wrote ${(processedBytes / 1024 / 1024).toFixed(1)} MB`);
-            }
-
-            await new Promise(r => setTimeout(r, 0));
-          }
-
-          await writable.close();
-          console.log("Model successfully cached to OPFS via stream pump.");
-        }
-      }
-
-      const file = await fileHandle.getFile();
-      if (file.size === 0) {
-        throw new Error("File size is 0 after write!");
-      }
-
-      const modelStream = file.stream();
-      msg.payload.modelStream = modelStream;
-
-      worker.postMessage(msg, [modelStream]);
-    } catch (e) {
-      console.error("Offscreen: Error loading model", e);
+  // ── Vision supplement init ────────────────────────────────────────────────
+  if (msg.type === 'init_vision') {
+    if (isVisionLoading || isVisionReady) {
+      console.log('Offscreen: vision model already loaded/loading, skipping.');
+      port.postMessage({ type: 'init_vision', payload: { isSuccess: true } });
+      return;
     }
-  } else {
-    worker.postMessage(msg);
+    isVisionLoading = true;
+    console.log('Offscreen: loading vision supplement:', msg.payload.modelName);
+    try {
+      const modelStream = await loadModelToOPFS(msg.payload.modelName);
+      const visionMsg = {
+        type: 'init',
+        payload: {
+          modelStream,
+          wasmUrl: chrome.runtime.getURL('wasm'),
+          modelName: msg.payload.modelName,
+        }
+      };
+      visionWorker.postMessage(visionMsg, [modelStream]);
+    } catch (e) {
+      isVisionLoading = false;
+      console.error('Offscreen: vision model load error', e);
+      port.postMessage({ type: 'init_vision', payload: { isSuccess: false, error: e.message } });
+    }
+    return;
   }
+
+  if (msg.type === 'init') {
+    try {
+      const modelStream = await loadModelToOPFS(msg.payload.modelName);
+      const initMsg = {
+        type: 'init',
+        payload: {
+          modelStream,
+          wasmUrl: chrome.runtime.getURL('wasm'),
+          modelName: msg.payload.modelName,
+        }
+      };
+      worker.postMessage(initMsg, [modelStream]);
+    } catch (e) {
+      console.error('Offscreen: Error loading primary model', e);
+    }
+    return;
+  }
+
+  // ── Query routing: images → vision worker (if ready), else primary ────────
+  if (msg.type === 'query') {
+    const hasImages = (msg.payload.questionImages && msg.payload.questionImages.length > 0) ||
+                      (msg.payload.choiceImages && msg.payload.choiceImages.length > 0);
+    if (hasImages && isVisionReady) {
+      visionWorker.postMessage(msg);
+    } else {
+      worker.postMessage(msg);
+    }
+    return;
+  }
+
+  // All other messages (cancel, etc.) go to the active primary worker
+  worker.postMessage(msg);
 });
 
-// Relay messages from Web Worker to Service Worker
+// Relay messages from primary worker to Service Worker
 worker.onmessage = (event) => {
   port.postMessage(event.data);
+};
+
+// Relay messages from vision worker to Service Worker
+visionWorker.onmessage = (event) => {
+  const msg = event.data;
+  if (msg.type === 'init') {
+    // Intercept the init-success from the vision worker and rewrite it
+    isVisionLoading = false;
+    isVisionReady = msg.payload.isSuccess;
+    port.postMessage({ type: 'init_vision', payload: { isSuccess: msg.payload.isSuccess } });
+  } else {
+    // Pass inference results straight through
+    port.postMessage(msg);
+  }
 };
 
 // Keep alive heartbeat (Manifest V3 T-T)
